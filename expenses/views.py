@@ -2,7 +2,7 @@ import calendar
 from datetime import datetime
 
 from django.contrib.auth.models import User
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
@@ -113,10 +113,16 @@ def register_telegram_user(request):
     if tg_user is not None:
         token, _ = Token.objects.get_or_create(user=tg_user.user)
         return Response({"token": token.key}, status=200)
-    with transaction.atomic():
-        user = User.objects.create_user(username=f"tg_{telegram_id}")
-        TelegramUser.objects.create(user=user, telegram_id=telegram_id)
-        token, _ = Token.objects.get_or_create(user=user)
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(username=f"tg_{telegram_id}")
+            TelegramUser.objects.create(user=user, telegram_id=telegram_id)
+            token, _ = Token.objects.get_or_create(user=user)
+    except IntegrityError:
+        # a parallel /start got there first - hand back the token it created
+        tg_user = TelegramUser.objects.get(telegram_id=telegram_id)
+        token, _ = Token.objects.get_or_create(user=tg_user.user)
+        return Response({"token": token.key}, status=200)
     return Response({"token": token.key}, status=201)
 
 

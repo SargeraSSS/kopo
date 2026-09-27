@@ -59,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif status == 200:
         await update.message.reply_text("👋 Welcome back!")
     else:
-        await update.message.reply_text("Service in unavaible. Plese try again later.")
+        await update.message.reply_text("⚠️ Service is unavailable. Please try again later.")
 
 
 async def on_startup(app):
@@ -81,15 +81,19 @@ async def on_startup(app):
 
 
 async def register_user(telegram_id: int, context):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{API_URL}/register-telegram/",
-            json={"telegram_id": telegram_id},
-            headers={"Authorization": f"Token {ADMIN_TOKEN}"},
-        )
-        if response.status_code in (200, 201):
-            context.user_data["token"] = response.json()["token"]
-        return response.status_code
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{API_URL}/register-telegram/",
+                json={"telegram_id": telegram_id},
+                headers={"Authorization": f"Token {ADMIN_TOKEN}"},
+            )
+    except httpx.HTTPError:
+        # API unreachable - the caller shows the "try again later" branch
+        return None
+    if response.status_code in (200, 201):
+        context.user_data["token"] = response.json()["token"]
+    return response.status_code
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
