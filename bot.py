@@ -326,8 +326,42 @@ async def handle_settings_callback(query, context):
         else:
             await query.edit_message_text("❌ Something went wrong")
     elif query.data == "settings_savings":
-        await query.edit_message_text("🎯 Enter your savings goal for this month:")
+        profile = await get_user_profile(context.user_data["token"])
+        current = profile.get("savings_goal")
+        keyboard = []
+        if current is not None:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "🗑 Remove goal", callback_data="settings_savings_clear"
+                    )
+                ]
+            )
+        keyboard.append(
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_to_settings")]
+        )
+        if current is None:
+            text = "🎯 No savings goal set.\nEnter your savings goal for this month:"
+        else:
+            text = (
+                f"🎯 Current goal: {float(current):.2f} "
+                f"{profile.get('currency', 'PLN')}\n"
+                "Enter a new savings goal for this month:"
+            )
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.user_data["state"] = "adding_savings_goal"
+    elif query.data == "settings_savings_clear":
+        context.user_data["state"] = None
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{API_URL}/set-savings-goal/",
+                json={"savings_goal": None},
+                headers={"Authorization": f"Token {context.user_data['token']}"},
+            )
+        if response.status_code == 200:
+            await query.edit_message_text("🗑 Savings goal removed!")
+        else:
+            await query.edit_message_text("❌ Something went wrong")
     elif query.data == "settings_categories":
         keyboard = [
             [
