@@ -38,6 +38,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = ["user", "currency", "savings_goal"]
 
 
+class SavingsGoalSerializer(serializers.Serializer):
+    savings_goal = serializers.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+        allow_null=True,
+    )
+
+
 class RegularPaymentsSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
 

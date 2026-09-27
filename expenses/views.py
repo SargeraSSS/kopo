@@ -24,6 +24,7 @@ from .serializers import (
     ExpenseSerializer,
     IncomeSerializer,
     RegularPaymentsSerializer,
+    SavingsGoalSerializer,
     UserProfileSerializer,
 )
 
@@ -183,7 +184,7 @@ def get_monthly_stats(request):
         currency = item["currency"]
         total_with_income[currency] = total_with_income.get(currency, 0) + item["total"]
 
-    profile = request.user.userprofile
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     remaining_days_in_month = days_in_month - now.day + 1
     income_total = total_with_income.get(profile.currency, 0)
@@ -245,11 +246,15 @@ def set_currency(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_savings_goal(request):
-    savings_goal = request.data.get("savings_goal")
+    serializer = SavingsGoalSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    profile.savings_goal = savings_goal
+    # missing key or explicit null both mean "clear the goal"
+    profile.savings_goal = serializer.validated_data.get("savings_goal")
     profile.save()
-    return Response({"savings_goal": savings_goal})
+
+    return Response({"savings_goal": profile.savings_goal})
 
 
 @api_view(["GET"])
