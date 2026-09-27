@@ -24,7 +24,6 @@ from .serializers import (
     ExpenseSerializer,
     IncomeSerializer,
     RegularPaymentsSerializer,
-    SavingsGoalSerializer,
     UserProfileSerializer,
 )
 
@@ -226,35 +225,31 @@ def get_history(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def notification_status(request):
-    status = request.data.get("notification_status")
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    profile.notification_status = status
-    profile.save()
-    return Response({"notification_status": status})
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_currency(request):
-    currency = request.data.get("currency")
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    profile.currency = currency
-    profile.save()
-    return Response({"currency": currency})
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_savings_goal(request):
-    serializer = SavingsGoalSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    # missing key or explicit null both mean "clear the goal"
-    profile.savings_goal = serializer.validated_data.get("savings_goal")
-    profile.save()
-
-    return Response({"savings_goal": profile.savings_goal})
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(["GET"])

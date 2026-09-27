@@ -35,17 +35,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         read_only_fields = ["user"]
-        fields = ["user", "currency", "savings_goal"]
-
-
-class SavingsGoalSerializer(serializers.Serializer):
-    savings_goal = serializers.DecimalField(
-        max_digits=8,
-        decimal_places=2,
-        min_value=0,
-        required=False,
-        allow_null=True,
-    )
+        fields = ["user", "currency", "savings_goal", "notification_status"]
 
 
 class RegularPaymentsSerializer(serializers.ModelSerializer):

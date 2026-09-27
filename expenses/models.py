@@ -42,7 +42,11 @@ class UserProfile(models.Model):
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="PLN")
     notification_status = models.BooleanField(default=True)
     savings_goal = models.DecimalField(
-        max_digits=8, decimal_places=2, blank=True, null=True
+        max_digits=8,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0)],
     )
 
 
