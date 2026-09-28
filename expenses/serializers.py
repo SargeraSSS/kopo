@@ -23,6 +23,16 @@ class ExpenseSerializer(serializers.ModelSerializer):
         read_only_fields = ["user", "date", "currency"]
         fields = ["user", "date", "id", "amount", "category", "description", "currency"]
 
+    def validate_category(self, value):
+        if value.user is None:
+            return value
+
+        request = self.context.get("request")
+        if request and value.user != request.user:
+            raise serializers.ValidationError("Invalid category.")
+
+        return value
+
 
 class IncomeSerializer(serializers.ModelSerializer):
     class Meta:
@@ -53,6 +63,15 @@ class RegularPaymentsSerializer(serializers.ModelSerializer):
             "user",
             "category_name",
         ]
+
+    def validate_category(self, value):
+        if value.user is None:
+            return value
+        request = self.context.get("request")
+        if request and value.user != request.user:
+            raise serializers.ValidationError("Invalid category")
+
+        return value
 
 
 class TelegramUserSerializer(serializers.ModelSerializer):
