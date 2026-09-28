@@ -101,3 +101,14 @@ def test_bad_telegram_id_is_rejected(admin_client, payload):
     response = admin_client.post("/api/register-telegram/", payload, format="json")
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_token_lookup_endpoint_is_gone(admin_client):
+    """/api/get-token/<telegram_id>/ used to hand out any user's token by their
+    telegram_id. Nothing called it, so it was removed rather than kept as an
+    admin-only convenience: a leaked ADMIN_TOKEN would have turned it into a
+    way into every account. This pins that decision."""
+    response = admin_client.get(f"/api/get-token/{TELEGRAM_ID}/")
+
+    assert response.status_code == 404

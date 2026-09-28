@@ -19,7 +19,6 @@ router.register("regular-payments", RegularPaymentsViewSet, basename="regular-pa
 
 urlpatterns = router.urls + [
     path("register-telegram/", views.register_telegram_user),
-    path("get-token/<int:telegram_id>/", views.get_token_by_telegram_id),
     path("stats/", views.get_monthly_stats),
     path("history/", views.get_history),
     path("set-currency/", views.set_currency),

@@ -126,17 +126,6 @@ def register_telegram_user(request):
     return Response({"token": token.key}, status=201)
 
 
-@api_view(["GET"])
-@permission_classes([IsAdminUser])
-def get_token_by_telegram_id(request, telegram_id):
-    try:
-        tg_user = TelegramUser.objects.get(telegram_id=telegram_id)
-        token, _ = Token.objects.get_or_create(user=tg_user.user)
-        return Response({"token": token.key})
-    except TelegramUser.DoesNotExist:
-        return Response({"error": "User not found"}, status=404)
-
-
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def regular_payment_automization(request):
