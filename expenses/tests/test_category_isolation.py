@@ -1,12 +1,13 @@
-"""Чужа категорія через ForeignKey.
+"""Another user's category through the ForeignKey.
 
-`CategoryViewSet` віддає юзеру тільки його власні та спільні категорії, але
-`ExpenseSerializer.category` і `RegularPaymentsSerializer.category` —
-`PrimaryKeyRelatedField` по ВСІХ Category. Юзер B може підсунути id категорії
-юзера A, і чужа назва вилізе в його ж `/api/stats/` та `/api/history/`.
+`CategoryViewSet` only hands a user their own and the shared categories, but
+`ExpenseSerializer.category` and `RegularPaymentsSerializer.category` are
+`PrimaryKeyRelatedField`s over ALL categories. User B could pass user A's
+category id, and A's category name would surface in B's own /api/stats/
+and /api/history/.
 
-Тут же — ізоляція списків для categories / income / regular-payments
-(на expenses вона вже покрита в test_expenses_api.py).
+Also covers list isolation for categories / income / regular-payments
+(expenses are already covered in test_expenses_api.py).
 """
 
 import pytest
@@ -26,10 +27,10 @@ def make_client(username):
 
 @pytest.fixture
 def two_users(db):
-    """A з власною категорією, B — порожній, плюс спільна категорія без власника."""
+    """A owns a private category, B owns nothing, plus one shared category."""
     user_a, client_a = make_client("user_a")
     user_b, client_b = make_client("user_b")
-    private = Category.objects.create(name="Секретна категорія A", user=user_a)
+    private = Category.objects.create(name="Private category of A", user=user_a)
     shared = Category.objects.create(name="Food", user=None)
     return {
         "user_a": user_a,
@@ -58,20 +59,20 @@ def test_expense_with_other_users_category_is_rejected(two_users):
 
 @pytest.mark.django_db
 def test_expense_error_does_not_leak_the_category(two_users):
-    """Текст помилки не повинен підтверджувати, що такий id існує, ані палити назву."""
+    """The error must not confirm the id exists, nor echo the category name."""
     response = two_users["client_b"].post(
         "/api/expenses/",
         {"amount": 100, "category": two_users["private_a"].id},
         format="json",
     )
 
-    assert "Секретна" not in str(response.data)
+    assert "Private category of A" not in str(response.data)
     assert "user_a" not in str(response.data)
 
 
 @pytest.mark.django_db
 def test_expense_with_own_category_still_works(two_users):
-    own = Category.objects.create(name="Транспорт", user=two_users["user_b"])
+    own = Category.objects.create(name="Transport", user=two_users["user_b"])
     response = two_users["client_b"].post(
         "/api/expenses/", {"amount": 100, "category": own.id}, format="json"
     )
@@ -81,7 +82,7 @@ def test_expense_with_own_category_still_works(two_users):
 
 @pytest.mark.django_db
 def test_expense_with_shared_category_still_works(two_users):
-    """Спільні категорії (user=None) мають лишитись доступними всім."""
+    """Shared categories (user=None) must stay available to everyone."""
     response = two_users["client_b"].post(
         "/api/expenses/",
         {"amount": 100, "category": two_users["shared"].id},
@@ -93,7 +94,7 @@ def test_expense_with_shared_category_still_works(two_users):
 
 @pytest.mark.django_db
 def test_expense_cannot_be_moved_to_other_users_category(two_users):
-    """Підміна не через create, а через PATCH уже створеної своєї витрати."""
+    """Not through create, but by PATCHing an expense the user already owns."""
     expense = Expense.objects.create(
         user=two_users["user_b"], amount=100, category=two_users["shared"]
     )
@@ -111,7 +112,7 @@ def test_expense_cannot_be_moved_to_other_users_category(two_users):
 
 @pytest.mark.django_db
 def test_other_users_category_never_reaches_stats(two_users):
-    """Наскрізна перевірка: чужа назва не має вилізти у звіті юзера B."""
+    """End to end: A's category name must never show up in B's report."""
     two_users["client_b"].post(
         "/api/expenses/",
         {"amount": 100, "category": two_users["private_a"].id},
@@ -119,7 +120,7 @@ def test_other_users_category_never_reaches_stats(two_users):
     )
 
     stats = two_users["client_b"].get("/api/stats/")
-    assert "Секретна категорія A" not in str(stats.data)
+    assert "Private category of A" not in str(stats.data)
 
 
 # --- regular payments ---------------------------------------------------
@@ -130,7 +131,7 @@ def test_regular_payment_with_other_users_category_is_rejected(two_users):
     response = two_users["client_b"].post(
         "/api/regular-payments/",
         {
-            "name": "Інтернет",
+            "name": "Internet",
             "amount": 65,
             "payment_day": 10,
             "category": two_users["private_a"].id,
@@ -147,7 +148,7 @@ def test_regular_payment_with_shared_category_still_works(two_users):
     response = two_users["client_b"].post(
         "/api/regular-payments/",
         {
-            "name": "Інтернет",
+            "name": "Internet",
             "amount": 65,
             "payment_day": 10,
             "category": two_users["shared"].id,
@@ -158,7 +159,7 @@ def test_regular_payment_with_shared_category_still_works(two_users):
     assert response.status_code == 201
 
 
-# --- ізоляція списків ---------------------------------------------------
+# --- list isolation -----------------------------------------------------
 
 
 @pytest.mark.django_db
@@ -167,8 +168,8 @@ def test_categories_list_hides_other_users_categories(two_users):
 
     assert response.status_code == 200
     names = [item["name"] for item in response.data]
-    assert "Секретна категорія A" not in names
-    assert "Food" in names  # спільна — має бути видно
+    assert "Private category of A" not in names
+    assert "Food" in names  # shared one must stay visible
 
 
 @pytest.mark.django_db
@@ -185,7 +186,7 @@ def test_income_list_hides_other_users_income(two_users):
 def test_regular_payments_list_hides_other_users_payments(two_users):
     RegularPayments.objects.create(
         user=two_users["user_a"],
-        name="Оренда A",
+        name="Rent of A",
         amount=2000,
         payment_day=1,
         category=two_users["private_a"],
