@@ -1,4 +1,5 @@
 import os
+from functools import partial
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -59,7 +60,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif status == 200:
         await update.message.reply_text("👋 Welcome back!")
     else:
-        await update.message.reply_text("⚠️ Service is unavailable. Please try again later.")
+        await update.message.reply_text(
+            "⚠️ Service is unavailable. Please try again later."
+        )
 
 
 async def on_startup(app):
@@ -75,7 +78,7 @@ async def on_startup(app):
     )
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_daily_reminder, "cron", hour=19, minute=0)
+    scheduler.add_job(partial(send_daily_reminder, app.bot), "cron", hour=19, minute=0)
     scheduler.add_job(process_monthly_payments, "cron", day=1, hour=0, minute=0)
     scheduler.start()
 
@@ -233,7 +236,7 @@ async def process_monthly_payments():
         )
 
 
-async def send_daily_reminder():
+async def send_daily_reminder(bot):
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{API_URL}/all-telegram-ids/",
@@ -247,7 +250,7 @@ async def send_daily_reminder():
         if not status:
             continue
         else:
-            await app.bot.send_message(
+            await bot.send_message(
                 chat_id=telegram_id,
                 text="""
         🕗 The day is coming to an end, time to track your day's expenses!
@@ -612,13 +615,18 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app.add_handler(CallbackQueryHandler(handle_category))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("history", history))
-app.add_handler(CommandHandler("settings", settings))
-app.add_handler(CommandHandler("income", income))
-app.add_handler(CommandHandler("help", help_command))
-app.run_polling()
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_category))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("settings", settings))
+    app.add_handler(CommandHandler("income", income))
+    app.add_handler(CommandHandler("help", help_command))
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
