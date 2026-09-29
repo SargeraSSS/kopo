@@ -6,6 +6,7 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import Forbidden, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -15,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-logger = logging.GetLogger(__name__)
+logger = logging.getLogger(__name__)
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
@@ -237,6 +238,12 @@ async def process_monthly_payments():
             headers={"Authorization": f"Token {ADMIN_TOKEN}"},
         )
 
+    if response.status_code != 200:
+        logger.error("Monthly payments: API returned %s", response.status_code)
+        return
+
+    logger.info("Monthly payments processed: %s", response.json())
+
 
 async def send_daily_reminder(bot):
     async with httpx.AsyncClient() as client:
@@ -244,24 +251,35 @@ async def send_daily_reminder(bot):
             f"{API_URL}/all-telegram-ids/",
             headers={"Authorization": f"Token {ADMIN_TOKEN}"},
         )
-        ids = response.json()
-        if response.status_code != 200:
-            logger.error("Reminder: API returned %s", response.status_code)
-            return
+
+    if response.status_code != 200:
+        logger.error("Daily reminder: API returned %s", response.status_code)
+        return
+
+    ids = response.json()
+    sent = 0
 
     for item in ids:
         telegram_id = item["telegram_id"]
-        status = item["notification_status"]
-        if not status:
+        if not item["notification_status"]:
             continue
-        else:
+
+        try:
             await bot.send_message(
                 chat_id=telegram_id,
-                text="""
-        🕗 The day is coming to an end, time to track your day's expenses!
-        Disable reminder or set time zone in 
-        /settings""",
+                text=(
+                    "🕗 The day is coming to an end, "
+                    "time to track your day's expenses!\n"
+                    "Disable the reminder in /settings"
+                ),
             )
+            sent += 1
+        except Forbidden:
+            logger.info("User %s blocked the bot", telegram_id)
+        except TelegramError as e:
+            logger.warning("Failed to notify %s: %s", telegram_id, e)
+
+    logger.info("Daily reminder: sent %s of %s", sent, len(ids))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
