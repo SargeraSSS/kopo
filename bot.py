@@ -1,3 +1,4 @@
+import logging
 import os
 from functools import partial
 
@@ -14,6 +15,7 @@ from telegram.ext import (
     filters,
 )
 
+logger = logging.GetLogger(__name__)
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
@@ -243,6 +245,9 @@ async def send_daily_reminder(bot):
             headers={"Authorization": f"Token {ADMIN_TOKEN}"},
         )
         ids = response.json()
+        if response.status_code != 200:
+            logger.error("Reminder: API returned %s", response.status_code)
+            return
 
     for item in ids:
         telegram_id = item["telegram_id"]
