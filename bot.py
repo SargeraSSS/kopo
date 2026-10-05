@@ -639,6 +639,13 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
