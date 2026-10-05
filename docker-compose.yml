@@ -19,6 +19,9 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      ALLOWED_HOSTS: web,localhost,127.0.0.1
     depends_on:
       - db
 
@@ -29,6 +32,8 @@ services:
       - .:/app
     env_file:
       - .env
+    environment:
+      API_URL: http://web:8000/api
     depends_on:
       - web
 
