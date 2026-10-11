@@ -4,6 +4,7 @@ from datetime import datetime
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
+from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
@@ -149,14 +150,24 @@ def register_telegram_user(request):
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def regular_payment_automization(request):
-    payments = RegularPayments.objects.all()
-    for payment in payments:
-        Expense.objects.create(
-            amount=payment.amount,
-            category=payment.category,
-            user=payment.user,
-            description=payment.name,
-        )
+    today = timezone.localdate()
+    first_month_day = today.replace(day=1)
+    last_month_day = calendar.monthrange(today.year, today.month)[1]
+    payments = RegularPayments.objects.filter(
+        Q(last_charged__isnull=True) | Q(last_charged__lt=first_month_day)
+    )
+    if today.day != last_month_day:
+        payments = payments.filter(payment_day__lte=today.day)
+    with transaction.atomic():
+        for payment in payments:
+            Expense.objects.create(
+                amount=payment.amount,
+                category=payment.category,
+                user=payment.user,
+                description=payment.name,
+            )
+            payment.last_charged = today
+            payment.save()
     return Response({"created": len(payments)})
 
 

@@ -65,3 +65,4 @@ class RegularPayments(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(31)]
     )
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    last_charged = models.DateField(blank=True, null=True)
