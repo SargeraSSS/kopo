@@ -27,4 +27,5 @@ urlpatterns = router.urls + [
     path("all-telegram-ids/", views.get_telegram_id),
     path("process-regular-payments/", views.regular_payment_automization),
     path("notification-status/", views.notification_status),
+    path("disable-notifications/", views.disable_notifications),
 ]

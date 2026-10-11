@@ -274,6 +274,21 @@ async def send_daily_reminder(bot):
             sent += 1
         except Forbidden:
             logger.info("User %s blocked the bot", telegram_id)
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{API_URL}/disable-notifications/",
+                        json={"telegram_id": telegram_id},
+                        headers={"Authorization": f"Token {ADMIN_TOKEN}"},
+                    )
+                    if response.status_code != 200:
+                        logger.warning(
+                            "Notification disabling goes wrong %s, status %s",
+                            telegram_id,
+                            response.status_code,
+                        )
+            except httpx.HTTPError as e:
+                logger.warning("Failed to disable %s: %s", telegram_id, e)
         except TelegramError as e:
             logger.warning("Failed to notify %s: %s", telegram_id, e)
 
