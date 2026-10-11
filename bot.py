@@ -94,8 +94,9 @@ async def register_user(telegram_id: int, context):
                 json={"telegram_id": telegram_id},
                 headers={"Authorization": f"Token {ADMIN_TOKEN}"},
             )
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
         # API unreachable - the caller shows the "try again later" branch
+        logger.warning("Failed to register %s: %s", telegram_id, e)
         return None
     if response.status_code in (200, 201):
         context.user_data["token"] = response.json()["token"]
@@ -215,20 +216,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         amount = float(text)
-        context.user_data["amount"] = amount
-        categories = await get_categories(context.user_data["token"])
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    cat["name"], callback_data=f"{cat['id']}:{cat['name']}"
-                )
-            ]
-            for cat in categories
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Select category:", reply_markup=reply_markup)
     except ValueError:
         await update.message.reply_text("Please send a number 💸")
+        return
+    context.user_data["amount"] = amount
+    categories = await get_categories(context.user_data["token"])
+    keyboard = [
+        [InlineKeyboardButton(cat["name"], callback_data=f"{cat['id']}:{cat['name']}")]
+        for cat in categories
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Select category:", reply_markup=reply_markup)
 
 
 async def process_monthly_payments():
