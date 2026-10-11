@@ -102,6 +102,12 @@ class RegularPaymentsViewSet(viewsets.ModelViewSet):
 @permission_classes([IsAdminUser])
 def disable_notifications(request):
     telegram_id = request.data.get("telegram_id")
+    if telegram_id is None:
+        return Response({"error": "telegram_id is required"}, status=400)
+    try:
+        telegram_id = int(telegram_id)
+    except (TypeError, ValueError):
+        return Response({"error": "telegram_id given in a wrong form"}, status=400)
     tg_user = TelegramUser.objects.filter(telegram_id=telegram_id).first()
     if tg_user is not None:
         UserProfile.objects.filter(
