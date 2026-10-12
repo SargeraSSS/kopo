@@ -34,3 +34,10 @@ Fully functional and deployed — running 24/7 on a VPS via Docker. Tests run au
 <img src="screenshots/stats.png" width="400">
 <img src="screenshots/flow.png" width="400">
 <img src="screenshots/settings.png" width="400">
+
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — components, data model, auth, scheduled jobs
+- [API reference](docs/api.md) — endpoints and examples
+- [Setup & deployment](docs/deployment.md) — configuration, Docker, tests, production checklist
