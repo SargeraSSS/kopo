@@ -49,7 +49,12 @@ def get_settings_keyboard():
                 "🔄 Regular payments", callback_data="settings_regular"
             ),
         ],
-        [InlineKeyboardButton("🔔 Notifications", callback_data="toggle_notification")],
+        [
+            InlineKeyboardButton(
+                "🔔 Notifications", callback_data="toggle_notification"
+            ),
+            InlineKeyboardButton("🕒 Timezone", callback_data="setting_timezone"),
+        ],
         [InlineKeyboardButton("❌ Close", callback_data="settings_close")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -559,6 +564,23 @@ async def handle_settings_callback(query, context):
             await query.edit_message_text("🗑 Expense cancelled!")
         else:
             await query.edit_message_text("❌ Something went wrong")
+    elif query.data == "settings_timezone":
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🇪🇺 Europe", callback_data="settings_tz_group_Europe"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🌎 America", callback_data="settings_tz_group_America"
+                )
+            ],
+            [InlineKeyboardButton("UTC", callback_data="settings_tz_set_UTC")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_to_settings")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("🕒 Choose region:", reply_markup=reply_markup)
 
 
 async def get_categories(token):
