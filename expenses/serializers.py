@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import (
+    TIME_ZONE_CHOICES,
     Category,
     Expense,
     Income,
@@ -43,9 +44,16 @@ class IncomeSerializer(serializers.ModelSerializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
+        timezone = serializers.ChoiceField(choices=TIME_ZONE_CHOICES, required=False)
         model = UserProfile
         read_only_fields = ["user"]
-        fields = ["user", "currency", "savings_goal", "notification_status"]
+        fields = [
+            "user",
+            "currency",
+            "savings_goal",
+            "notification_status",
+            "timezone",
+        ]
 
 
 class RegularPaymentsSerializer(serializers.ModelSerializer):

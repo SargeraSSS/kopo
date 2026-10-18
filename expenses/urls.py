@@ -22,6 +22,7 @@ urlpatterns = router.urls + [
     path("stats/", views.get_monthly_stats),
     path("history/", views.get_history),
     path("set-currency/", views.set_currency),
+    path("set-timezone/", views.set_timezone),
     path("set-savings-goal/", views.set_savings_goal),
     path("get-profile/", views.get_profile),
     path("all-telegram-ids/", views.get_telegram_id),

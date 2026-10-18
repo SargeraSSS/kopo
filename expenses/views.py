@@ -271,6 +271,16 @@ def set_currency(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+def set_timezone(request):
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def set_savings_goal(request):
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
     serializer = UserProfileSerializer(profile, data=request.data, partial=True)
@@ -288,5 +298,6 @@ def get_profile(request):
             "currency": profile.currency,
             "savings_goal": profile.savings_goal,
             "notification_status": profile.notification_status,
+            "timezone": profile.timezone,
         }
     )
