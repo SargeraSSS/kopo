@@ -11,16 +11,20 @@ from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from expenses.models import TelegramUser
+from expenses.models import TelegramUser, UserProfile
 
 TELEGRAM_ID = 123456789
 
 
 @pytest.fixture
 def admin_client(db):
-    admin = User.objects.create_user(username="bot_admin", password="pass123", is_staff=True)
+    admin = User.objects.create_user(
+        username="bot_admin", password="pass123", is_staff=True
+    )
     client = APIClient()
-    client.credentials(HTTP_AUTHORIZATION=f"Token {Token.objects.create(user=admin).key}")
+    client.credentials(
+        HTTP_AUTHORIZATION=f"Token {Token.objects.create(user=admin).key}"
+    )
     return client
 
 
@@ -33,6 +37,25 @@ def test_first_start_creates_user(admin_client):
     assert response.status_code == 201
     assert response.data["token"]
     assert TelegramUser.objects.filter(telegram_id=TELEGRAM_ID).count() == 1
+
+
+@pytest.mark.django_db
+def test_first_start_creates_profile_with_reminders_on(admin_client):
+    """A user who only pressed /start must get a profile with reminders on.
+
+    all-telegram-ids reads notification_status through the profile, so a missing
+    profile shows up there as null and the daily reminder skips the user (C4).
+    """
+    admin_client.post(
+        "/api/register-telegram/", {"telegram_id": TELEGRAM_ID}, format="json"
+    )
+
+    profile = UserProfile.objects.get(user__telegram_profile__telegram_id=TELEGRAM_ID)
+    assert profile.notification_status is True
+
+    response = admin_client.get("/api/all-telegram-ids/")
+    statuses = {item["telegram_id"]: item["notification_status"] for item in response.data}
+    assert statuses[TELEGRAM_ID] is True
 
 
 @pytest.mark.django_db

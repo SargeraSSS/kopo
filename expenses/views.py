@@ -138,6 +138,7 @@ def register_telegram_user(request):
         with transaction.atomic():
             user = User.objects.create_user(username=f"tg_{telegram_id}")
             TelegramUser.objects.create(user=user, telegram_id=telegram_id)
+            UserProfile.objects.create(user=user)
             token, _ = Token.objects.get_or_create(user=user)
     except IntegrityError:
         # a parallel /start got there first - hand back the token it created

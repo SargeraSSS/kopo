@@ -61,7 +61,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if status == 201:
         await update.message.reply_text(f"{start_message}")
     elif status == 200:
-        await update.message.reply_text("👋 Welcome back!")
+        await update.message.reply_text(
+            "👋 Welcome back!\nReminder: You can turn OFF/ON notifications in /settings"
+        )
     else:
         await update.message.reply_text(
             "⚠️ Service is unavailable. Please try again later."
