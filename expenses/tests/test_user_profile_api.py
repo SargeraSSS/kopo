@@ -152,6 +152,43 @@ def test_non_boolean_notification_status_is_rejected(api_client, user):
     assert profile_of(user).notification_status is True
 
 
+# --- timezone ---------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_timezone_is_stored(api_client, user):
+    """Sent by the zone buttons; the zone contains "/" and "_"."""
+    response = api_client.post(
+        "/api/set-timezone/", {"timezone": "America/New_York"}, format="json"
+    )
+
+    assert response.status_code == 200
+    assert profile_of(user).timezone == "America/New_York"
+    assert api_client.get("/api/get-profile/").data["timezone"] == "America/New_York"
+
+
+@pytest.mark.django_db
+def test_unknown_timezone_is_rejected(api_client, user):
+    api_client.post("/api/set-timezone/", {"timezone": "Europe/Kyiv"}, format="json")
+
+    response = api_client.post(
+        "/api/set-timezone/", {"timezone": "Mars/Olympus"}, format="json"
+    )
+
+    assert response.status_code == 400
+    assert profile_of(user).timezone == "Europe/Kyiv"
+
+
+@pytest.mark.django_db
+def test_empty_timezone_request_keeps_current_zone(api_client, user):
+    api_client.post("/api/set-timezone/", {"timezone": "Europe/Kyiv"}, format="json")
+
+    response = api_client.post("/api/set-timezone/", {}, format="json")
+
+    assert response.status_code == 200
+    assert profile_of(user).timezone == "Europe/Kyiv"
+
+
 # --- ownership and auth -----------------------------------------------------
 
 
@@ -177,6 +214,7 @@ def test_settings_require_auth():
 
     assert anonymous.post("/api/set-currency/", {"currency": "UAH"}).status_code == 401
     assert anonymous.post("/api/set-savings-goal/", {"savings_goal": 1}).status_code == 401
+    assert anonymous.post("/api/set-timezone/", {"timezone": "UTC"}).status_code == 401
     assert (
         anonymous.post("/api/notification-status/", {"notification_status": True}).status_code
         == 401
