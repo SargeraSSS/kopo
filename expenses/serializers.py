@@ -43,8 +43,9 @@ class IncomeSerializer(serializers.ModelSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    timezone = serializers.ChoiceField(choices=TIME_ZONE_CHOICES, required=False)
+
     class Meta:
-        timezone = serializers.ChoiceField(choices=TIME_ZONE_CHOICES, required=False)
         model = UserProfile
         read_only_fields = ["user"]
         fields = [
