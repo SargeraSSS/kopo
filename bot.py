@@ -16,6 +16,8 @@ from telegram.ext import (
     filters,
 )
 
+from expenses.timezones import TIME_ZONE_GROUPS
+
 logger = logging.getLogger(__name__)
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -53,7 +55,7 @@ def get_settings_keyboard():
             InlineKeyboardButton(
                 "🔔 Notifications", callback_data="toggle_notification"
             ),
-            InlineKeyboardButton("🕒 Timezone", callback_data="setting_timezone"),
+            InlineKeyboardButton("🕒 Timezone", callback_data="settings_timezone"),
         ],
         [InlineKeyboardButton("❌ Close", callback_data="settings_close")],
     ]
@@ -581,6 +583,31 @@ async def handle_settings_callback(query, context):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🕒 Choose region:", reply_markup=reply_markup)
+    elif query.data.startswith("settings_tz_group_"):
+        group = query.data.removeprefix("settings_tz_group_")
+        zones = TIME_ZONE_GROUPS.get(group, [])
+        buttons = [
+            InlineKeyboardButton(label, callback_data=f"settings_tz_set_{zone}")
+            for zone, label in zones
+        ]
+        keyboard = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+        keyboard.append(
+            [InlineKeyboardButton("⬅️ Back", callback_data="settings_timezone")]
+        )
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("🕒 Choose timezone:", reply_markup=reply_markup)
+    elif query.data.startswith("settings_tz_set_"):
+        zone = query.data.removeprefix("settings_tz_set_")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{API_URL}/set-timezone/",
+                json={"timezone": zone},
+                headers={"Authorization": f"Token {context.user_data['token']}"},
+            )
+        if response.status_code == 200:
+            await query.edit_message_text(f"✅ Timezone set to {zone}!")
+        else:
+            await query.edit_message_text("❌ Something went wrong")
 
 
 async def get_categories(token):
