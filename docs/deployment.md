@@ -30,7 +30,7 @@ docker compose logs -f bot
 Notes:
 - `web` runs `collectstatic` and then gunicorn on port 8000. Static files are served by WhiteNoise.
 - PostgreSQL is published only on `127.0.0.1:5432`; data lives in the `postgres_data` volume.
-- On boot the bot calls `process-regular-payments/` once. If `web` is not ready yet it logs `API unreachable` and retries at midnight.
+- On boot the bot calls `process-regular-payments/` once. Compose starts `bot` only after `web` passes its healthcheck, so the call should succeed; if it still fails it logs `API unreachable` and retries at midnight.
 
 ## Local development (without Docker)
 
