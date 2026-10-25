@@ -135,3 +135,27 @@ def test_token_lookup_endpoint_is_gone(admin_client):
     response = admin_client.get(f"/api/get-token/{TELEGRAM_ID}/")
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_all_telegram_ids_returns_the_users_timezone(admin_client):
+    """The bot picks who gets the 19:00 reminder by this zone (B5)."""
+    admin_client.post(
+        "/api/register-telegram/", {"telegram_id": TELEGRAM_ID}, format="json"
+    )
+
+    zones = {
+        item["telegram_id"]: item["timezone"]
+        for item in admin_client.get("/api/all-telegram-ids/").data
+    }
+    assert zones[TELEGRAM_ID] == "UTC"
+
+    UserProfile.objects.filter(
+        user__telegram_profile__telegram_id=TELEGRAM_ID
+    ).update(timezone="Europe/Kyiv")
+
+    zones = {
+        item["telegram_id"]: item["timezone"]
+        for item in admin_client.get("/api/all-telegram-ids/").data
+    }
+    assert zones[TELEGRAM_ID] == "Europe/Kyiv"

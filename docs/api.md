@@ -35,7 +35,7 @@ Currencies: `PLN`, `UAH`, `EUR`, `USD`.
 | POST | `/api/set-currency/` | user | `{"currency": "EUR"}` → updated profile |
 | POST | `/api/set-savings-goal/` | user | `{"savings_goal": 500}` → updated profile |
 | POST | `/api/notification-status/` | user | `{"notification_status": false}` → updated profile |
-| GET | `/api/all-telegram-ids/` | admin | `[{"telegram_id", "notification_status"}, …]` |
+| GET | `/api/all-telegram-ids/` | admin | `[{"telegram_id", "notification_status", "timezone"}, …]` |
 | POST | `/api/disable-notifications/` | admin | `{"telegram_id": 123}` → `200`; `400` bad id; `404` unknown id |
 | POST | `/api/process-regular-payments/` | admin | Charges due regular payments, returns `{"created": N}`. Idempotent per month |
 
