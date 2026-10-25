@@ -3,7 +3,7 @@
 ```
 Telegram user ⇄ Telegram ⇄ bot.py (polling) ──HTTP, Token auth──▶ Django REST API ──▶ PostgreSQL
                               │
-                              └─ APScheduler: daily reminder (19:00), regular payments (00:00 + on startup)
+                              └─ APScheduler: daily reminder (hourly, 19:00 user-local), regular payments (00:00 + on startup)
 ```
 
 The project is two processes sharing one codebase:
@@ -57,7 +57,7 @@ The project is two processes sharing one codebase:
 
 | Job | When | What |
 |-----|------|------|
-| `send_daily_reminder` | daily 19:00 (server time) | `GET all-telegram-ids/`, message everyone with notifications on. A `Forbidden` (user blocked the bot) turns that user's notifications off via `disable-notifications/`; other errors are logged and the loop continues |
+| `send_daily_reminder` | hourly at :00 | `GET all-telegram-ids/`, message everyone with notifications on whose timezone is at 19:00 now (no zone → UTC). A `Forbidden` (user blocked the bot) turns that user's notifications off via `disable-notifications/`; other errors are logged and the loop continues |
 | `process_regular_payments` | daily 00:00 and once on bot startup | `POST process-regular-payments/` |
 
 ### Regular payments logic

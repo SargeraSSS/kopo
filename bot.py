@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone
 from functools import partial
 
 import httpx
@@ -16,7 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-from expenses.timezones import TIME_ZONE_GROUPS
+from expenses.timezones import TIME_ZONE_GROUPS, is_reminder_hour
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -90,7 +91,8 @@ async def on_startup(app):
     )
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(partial(send_daily_reminder, app.bot), "cron", hour=19, minute=0)
+    # Hourly: each user gets the reminder when it is 19:00 in their own timezone
+    scheduler.add_job(partial(send_daily_reminder, app.bot), "cron", minute=0)
     scheduler.add_job(process_regular_payments, "cron", hour=0, minute=0)
     scheduler.start()
 
@@ -269,13 +271,18 @@ async def send_daily_reminder(bot):
         logger.error("Daily reminder: API returned %s", response.status_code)
         return
 
-    ids = response.json()
+    now = datetime.now(timezone.utc)
+    due = [
+        item
+        for item in response.json()
+        if item["notification_status"] and is_reminder_hour(item.get("timezone"), now)
+    ]
+    if not due:
+        return
     sent = 0
 
-    for item in ids:
+    for item in due:
         telegram_id = item["telegram_id"]
-        if not item["notification_status"]:
-            continue
 
         try:
             await bot.send_message(
@@ -307,7 +314,7 @@ async def send_daily_reminder(bot):
         except TelegramError as e:
             logger.warning("Failed to notify %s: %s", telegram_id, e)
 
-    logger.info("Daily reminder: sent %s of %s", sent, len(ids))
+    logger.info("Daily reminder: sent %s of %s", sent, len(due))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,7 +335,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Set up recurring expenses (like rent or internet) in Settings — "
         "they'll be added automatically each month.\n\n"
         "🔔 *Notifications*\n"
-        "Get a daily reminder at 19:00 to log your expenses (toggle in Settings)."
+        "Get a daily reminder at 19:00 your local time to log your expenses "
+        "(toggle it and set your timezone in Settings)."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 

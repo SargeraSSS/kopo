@@ -1,5 +1,9 @@
 """Timezone choices, kept free of Django imports so bot.py can use them too."""
 
+from zoneinfo import ZoneInfo
+
+REMINDER_HOUR = 19
+
 TIME_ZONE_GROUPS = {
     "Europe": [
         ("Europe/Kyiv", "Kyiv"),
@@ -40,3 +44,13 @@ TIME_ZONE_GROUPS = {
 TIME_ZONE_CHOICES = [
     zone for zones in TIME_ZONE_GROUPS.values() for zone in zones
 ] + [("UTC", "UTC")]
+
+
+def is_reminder_hour(zone_name, now_utc):
+    """True if it is REMINDER_HOUR o'clock in zone_name at now_utc.
+
+    The reminder job runs hourly, which is enough because every zone above has
+    a whole-hour offset. A +5:30 zone would need a run at :30 too.
+    A missing zone (user without a profile) falls back to UTC.
+    """
+    return now_utc.astimezone(ZoneInfo(zone_name or "UTC")).hour == REMINDER_HOUR
