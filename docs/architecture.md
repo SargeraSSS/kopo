@@ -58,7 +58,7 @@ The project is two processes sharing one codebase:
 | Job | When | What |
 |-----|------|------|
 | `send_daily_reminder` | daily 19:00 (server time) | `GET all-telegram-ids/`, message everyone with notifications on. A `Forbidden` (user blocked the bot) turns that user's notifications off via `disable-notifications/`; other errors are logged and the loop continues |
-| `process_monthly_payments` | daily 00:00 and once on bot startup | `POST process-regular-payments/` |
+| `process_regular_payments` | daily 00:00 and once on bot startup | `POST process-regular-payments/` |
 
 ### Regular payments logic
 

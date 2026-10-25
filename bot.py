@@ -91,10 +91,10 @@ async def on_startup(app):
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(partial(send_daily_reminder, app.bot), "cron", hour=19, minute=0)
-    scheduler.add_job(process_monthly_payments, "cron", hour=0, minute=0)
+    scheduler.add_job(process_regular_payments, "cron", hour=0, minute=0)
     scheduler.start()
 
-    await process_monthly_payments()
+    await process_regular_payments()
 
 
 async def register_user(telegram_id: int, context):
@@ -240,7 +240,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Select category:", reply_markup=reply_markup)
 
 
-async def process_monthly_payments():
+async def process_regular_payments():
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -249,13 +249,13 @@ async def process_monthly_payments():
             )
 
         if response.status_code != 200:
-            logger.error("Monthly payments: API returned %s", response.status_code)
+            logger.error("Regular payments: API returned %s", response.status_code)
             return
     except httpx.HTTPError as e:
-        logger.error("Monthly payments: API unreachable: %s", e)
+        logger.error("Regular payments: API unreachable: %s", e)
         return
 
-    logger.info("Monthly payments processed: %s", response.json())
+    logger.info("Regular payments processed: %s", response.json())
 
 
 async def send_daily_reminder(bot):

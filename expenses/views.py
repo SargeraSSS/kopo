@@ -150,7 +150,7 @@ def register_telegram_user(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-def regular_payment_automization(request):
+def process_regular_payments(request):
     today = timezone.localdate()
     first_month_day = today.replace(day=1)
     last_month_day = calendar.monthrange(today.year, today.month)[1]
