@@ -3,9 +3,9 @@ APScheduler==3.11.2
 asgiref==3.11.1
 certifi==2026.5.20
 colorama==0.4.6
-Django==6.0.5
+Django==6.0.9
 djangorestframework==3.17.1
-gunicorn==26.0.0
+gunicorn==26.2.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -19,6 +19,7 @@ pytest==9.1.1
 pytest-django==4.12.0
 python-dotenv==1.2.2
 python-telegram-bot==22.7
+redis==8.1.0
 sqlparse==0.5.5
 tzdata==2026.2
 tzlocal==5.4.3
