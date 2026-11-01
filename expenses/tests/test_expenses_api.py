@@ -52,6 +52,7 @@ def test_stats_daily_limit(api_client, user):
     from expenses.models import Category, Expense, UserProfile, Income
     import calendar
     from datetime import datetime
+    from decimal import ROUND_FLOOR, Decimal
 
     profile, _ = UserProfile.objects.get_or_create(user=user)
     profile.currency = "PLN"
@@ -65,7 +66,9 @@ def test_stats_daily_limit(api_client, user):
     now = datetime.now()
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     remaining_days = days_in_month - now.day + 1
-    expected_limit = (6000 - 1000 - 2000) // remaining_days
+    expected_limit = (Decimal(6000 - 1000 - 2000) / remaining_days).quantize(
+        Decimal("0.01"), rounding=ROUND_FLOOR
+    )
 
     assert response.data["daily_limit"] == expected_limit
 

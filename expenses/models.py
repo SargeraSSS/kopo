@@ -1,8 +1,10 @@
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import User
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from .timezones import TIME_ZONE_CHOICES, TIME_ZONE_GROUPS  # noqa: F401
 
@@ -30,7 +32,7 @@ class Expense(models.Model):
         max_digits=10, decimal_places=2, validators=[POSITIVE_AMOUNT]
     )
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
-    date = models.DateField(auto_now_add=True)
+    date = models.DateField(default=timezone.localdate)
     description = models.CharField(max_length=50, blank=True, null=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="PLN")
@@ -40,7 +42,7 @@ class Income(models.Model):
     amount = models.DecimalField(
         max_digits=10, decimal_places=2, validators=[POSITIVE_AMOUNT]
     )
-    date = models.DateField(auto_now_add=True)
+    date = models.DateField(default=timezone.localdate)
     description = models.CharField(max_length=50, blank=True, null=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="PLN")
@@ -58,6 +60,9 @@ class UserProfile(models.Model):
         validators=[MinValueValidator(0)],
     )
     timezone = models.CharField(max_length=64, default="UTC")
+
+    def today(self):
+        return timezone.localdate(timezone=ZoneInfo(self.timezone))
 
 
 class TelegramUser(models.Model):

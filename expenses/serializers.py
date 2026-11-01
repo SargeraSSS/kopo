@@ -21,7 +21,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class ExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expense
-        read_only_fields = ["user", "date", "currency"]
+        read_only_fields = ["user", "currency"]
         fields = ["user", "date", "id", "amount", "category", "description", "currency"]
 
     def validate_category(self, value):
@@ -32,6 +32,12 @@ class ExpenseSerializer(serializers.ModelSerializer):
         if request and value.user != request.user:
             raise serializers.ValidationError("Invalid category.")
 
+        return value
+
+    def validate_date(self, value):
+        profile, _ = UserProfile.objects.get_or_create(user=self.context["request"].user)
+        if value > profile.today():
+            raise serializers.ValidationError("Date cannot be in the future.")
         return value
 
 

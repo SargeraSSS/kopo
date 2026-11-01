@@ -1,5 +1,6 @@
 import calendar
-from datetime import datetime
+from datetime import timedelta
+from decimal import ROUND_FLOOR, Decimal
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
@@ -27,6 +28,11 @@ from .serializers import (
     RegularPaymentsSerializer,
     UserProfileSerializer,
 )
+
+
+def month_range(day):
+    last_day = calendar.monthrange(day.year, day.month)[1]
+    return day.replace(day=1), day.replace(day=last_day)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -60,7 +66,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     # automatically assigns the current user on creation
     def perform_create(self, serializer):
         profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
-        serializer.save(user=self.request.user, currency=profile.currency)
+        serializer.save(
+            user=self.request.user,
+            currency=profile.currency,
+            date=serializer.validated_data.get("date", profile.today()),
+        )
 
 
 class IncomeViewSet(viewsets.ModelViewSet):
@@ -72,7 +82,9 @@ class IncomeViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
-        serializer.save(user=self.request.user, currency=profile.currency)
+        serializer.save(
+            user=self.request.user, currency=profile.currency, date=profile.today()
+        )
 
 
 # User profile (currency, daily limit) - one per user
@@ -95,8 +107,12 @@ class RegularPaymentsViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return RegularPayments.objects.filter(user=self.request.user)
 
+    # a day that has already passed counts as paid for the current month
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        today = profile.today()
+        passed = serializer.validated_data["payment_day"] < today.day
+        serializer.save(user=self.request.user, last_charged=today if passed else None)
 
 
 @api_view(["POST"])
@@ -151,31 +167,49 @@ def register_telegram_user(request):
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def process_regular_payments(request):
-    today = timezone.localdate()
-    first_month_day = today.replace(day=1)
-    last_month_day = calendar.monthrange(today.year, today.month)[1]
+    """Charge due payments. Safe to repeat: the bot calls it every hour, because
+    the local day starts at a different moment in every timezone."""
     description_length = Expense._meta.get_field("description").max_length
-    # "of" keeps the lock off the outer-joined profile, Postgres refuses that
-    payments = (
-        RegularPayments.objects.select_for_update(of=("self",))
-        .select_related("user__userprofile")
-        .filter(Q(last_charged__isnull=True) | Q(last_charged__lt=first_month_day))
-    )
-    if today.day != last_month_day:
-        payments = payments.filter(payment_day__lte=today.day)
+    # rows charged this month even in the zone furthest ahead need no look
+    cutoff = (timezone.localdate() + timedelta(days=1)).replace(day=1)
+    expenses = []
+    charged = []
     with transaction.atomic():
+        # "of" keeps the lock off the outer-joined profile, Postgres refuses that
+        payments = (
+            RegularPayments.objects.select_for_update(of=("self",))
+            .select_related("user__userprofile")
+            .filter(Q(last_charged__isnull=True) | Q(last_charged__lt=cutoff))
+        )
         for payment in payments:
             profile = getattr(payment.user, "userprofile", None)
-            Expense.objects.create(
-                amount=payment.amount,
-                category_id=payment.category_id,
-                user=payment.user,
-                description=payment.name[:description_length],
-                currency=profile.currency if profile else "PLN",
+            today = profile.today() if profile else timezone.localdate()
+            first_month_day, last_month_day = month_range(today)
+            already_charged = (
+                payment.last_charged is not None
+                and payment.last_charged >= first_month_day
+            )
+            not_yet_due = payment.payment_day > today.day and today != last_month_day
+            if already_charged or not_yet_due:
+                continue
+            expenses.append(
+                Expense(
+                    amount=payment.amount,
+                    category_id=payment.category_id,
+                    user=payment.user,
+                    description=payment.name[:description_length],
+                    currency=profile.currency if profile else "PLN",
+                    date=min(
+                        first_month_day + timedelta(days=payment.payment_day - 1),
+                        last_month_day,
+                    ),
+                )
             )
             payment.last_charged = today
-            payment.save()
-    return Response({"created": len(payments)})
+            charged.append(payment)
+        Expense.objects.bulk_create(expenses)
+        RegularPayments.objects.bulk_update(charged, ["last_charged"])
+    return Response({"created": len(expenses)})
 
 
 @api_view(["GET"])
@@ -197,18 +231,16 @@ def get_telegram_id(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_monthly_stats(request):
-    now = datetime.now()
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    today = profile.today()
+    month = month_range(today)
     expenses = (
-        Expense.objects.filter(
-            user=request.user, date__month=now.month, date__year=now.year
-        )
+        Expense.objects.filter(user=request.user, date__range=month)
         .values("category__name", "currency")
         .annotate(total=Sum("amount"))
     )
     income = (
-        Income.objects.filter(
-            user=request.user, date__month=now.month, date__year=now.year
-        )
+        Income.objects.filter(user=request.user, date__range=month)
         .values("currency")
         .annotate(total=Sum("amount"))
     )
@@ -223,21 +255,19 @@ def get_monthly_stats(request):
         currency = item["currency"]
         total_with_income[currency] = total_with_income.get(currency, 0) + item["total"]
 
-    profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    days_in_month = calendar.monthrange(now.year, now.month)[1]
-    remaining_days_in_month = days_in_month - now.day + 1
+    remaining_days_in_month = month[1].day - today.day + 1
     income_total = total_with_income.get(profile.currency, 0)
     expenses_total = totals_by_currency.get(profile.currency, 0)
     savings_goal = profile.savings_goal or 0
     daily_limit = (
-        income_total - savings_goal - expenses_total
-    ) // remaining_days_in_month
+        Decimal(income_total - savings_goal - expenses_total) / remaining_days_in_month
+    ).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
     currency_mismatch = any(
         currency != profile.currency for currency in total_with_income.keys()
     ) or any(currency != profile.currency for currency in totals_by_currency.keys())
     return Response(
         {
-            "month": now.strftime("%B %Y"),
+            "month": today.strftime("%B %Y"),
             "categories": list(expenses),
             "total": totals_by_currency,
             "income": total_with_income,
@@ -251,10 +281,10 @@ def get_monthly_stats(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_history(request):
-    now = datetime.now()
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
     expenses = (
         Expense.objects.filter(
-            user=request.user, date__month=now.month, date__year=now.year
+            user=request.user, date__range=month_range(profile.today())
         )
         .order_by("-date")
         .values("amount", "category__name", "date", "description", "currency")
