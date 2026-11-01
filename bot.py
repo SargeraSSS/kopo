@@ -210,7 +210,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     # a double tap on a button that edits its own message
     if isinstance(error, BadRequest) and "not modified" in str(error):
         return
-    logger.error("Update failed: %s", update, exc_info=error)
+    # the id is enough: the update itself holds the user's name and message
+    update_id = update.update_id if isinstance(update, Update) else None
+    logger.error("Update %s failed", update_id, exc_info=error)
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(SOMETHING_WRONG)

@@ -469,3 +469,18 @@ def test_antiflood_counts_each_user_separately(api):
             pass
 
     run(bot.antiflood(message_update("100", user_id=2), context()))
+
+
+def test_error_log_does_not_contain_the_users_message(api, caplog):
+    message = message_update("my secret spending").message
+    update = mock.Mock(
+        spec=bot.Update,
+        update_id=42,
+        effective_message=message,
+        __str__=lambda self: "my secret spending",
+    )
+
+    run(bot.on_error(update, SimpleNamespace(error=NetworkError("boom"))))
+
+    assert "Update 42 failed" in caplog.text
+    assert "my secret spending" not in caplog.text
