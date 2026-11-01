@@ -1,19 +1,24 @@
+import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from functools import partial
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import Forbidden, TelegramError
+from telegram.constants import MessageLimit
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -24,6 +29,25 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 API_URL = os.getenv("API_URL")
+
+# One client for the whole bot: it keeps connections to the API open
+api_client = httpx.AsyncClient(timeout=10)
+
+SERVICE_UNAVAILABLE = "⚠️ Service is unavailable. Please try again later."
+SOMETHING_WRONG = "❌ Something went wrong"
+SETTINGS_CALLBACKS = (
+    "settings_",
+    "toggle_notification",
+    "cat_",
+    "delete_",
+    "delcat_",
+    "currency_",
+    "reg_",
+    "regcat_",
+    "back_to_settings",
+    "delreg_",
+    "delexp_",
+)
 
 
 start_message = """
@@ -38,6 +62,58 @@ Here's what I can do:
 
 For more info just type /help
 """
+
+
+async def api_request(method, path, token, json=None):
+    """Call the API. None means it could not be reached."""
+    try:
+        return await api_client.request(
+            method,
+            f"{API_URL}{path}",
+            json=json,
+            headers={"Authorization": f"Token {token}"},
+        )
+    except httpx.HTTPError as e:
+        logger.warning("API %s %s failed: %s", method, path, e)
+        return None
+
+
+def error_text(response):
+    """What to tell the user about a failed API call."""
+    if response is None:
+        return SERVICE_UNAVAILABLE
+    if response.status_code == 429:
+        seconds = response.headers.get("Retry-After", "a few")
+        return f"⏳ Too many requests. Try again in {seconds} seconds."
+    if response.status_code == 400:
+        try:
+            body = response.json()
+        except ValueError:
+            return SOMETHING_WRONG
+        for value in body.values() if isinstance(body, dict) else []:
+            return f"❌ {value[0] if isinstance(value, list) else value}"
+    return SOMETHING_WRONG
+
+
+def parse_amount(text):
+    """A positive number from user input, None for anything else."""
+    try:
+        amount = Decimal(text.strip().replace(",", "."))
+    except InvalidOperation:
+        return None
+    if not amount.is_finite() or amount <= 0:
+        return None
+    return amount
+
+
+def split_text(text):
+    """Cut text on line breaks into pieces Telegram accepts."""
+    chunks = [""]
+    for line in text.splitlines(keepends=True):
+        if len(chunks[-1]) + len(line) > MessageLimit.MAX_TEXT_LENGTH:
+            chunks.append("")
+        chunks[-1] += line
+    return chunks
 
 
 def get_settings_keyboard():
@@ -73,9 +149,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👋 Welcome back!\nReminder: You can turn OFF/ON notifications in /settings"
         )
     else:
-        await update.message.reply_text(
-            "⚠️ Service is unavailable. Please try again later."
-        )
+        await update.message.reply_text(SERVICE_UNAVAILABLE)
+
+
+async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Runs before every handler.
+
+    Tokens live in memory, so after a bot restart every user has to get theirs
+    back. /start is left alone: it registers by itself and needs the status.
+    """
+    # edits, channel posts and the like are not ours to handle
+    if update.message is None and update.callback_query is None:
+        raise ApplicationHandlerStop
+    text = update.message.text if update.message else None
+    # a command abandons whatever input the bot was waiting for
+    if text and text.startswith("/"):
+        context.user_data["state"] = None
+    if context.user_data.get("token") or (text and text.startswith("/start")):
+        return
+    await register_user(update.effective_user.id, context)
+    if not context.user_data.get("token"):
+        if update.callback_query:
+            await update.callback_query.answer()
+        await update.effective_message.reply_text(SERVICE_UNAVAILABLE)
+        raise ApplicationHandlerStop
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    error = context.error
+    # a double tap on a button that edits its own message
+    if isinstance(error, BadRequest) and "not modified" in str(error):
+        return
+    logger.error("Update failed: %s", update, exc_info=error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(SOMETHING_WRONG)
+        except TelegramError as e:
+            logger.warning("Failed to report an error to the user: %s", e)
+
+
+async def on_shutdown(app):
+    await api_client.aclose()
 
 
 async def on_startup(app):
@@ -90,26 +204,25 @@ async def on_startup(app):
         ]
     )
 
-    scheduler = AsyncIOScheduler()
+    # The default grace time is 1 second: a busy loop would silently skip a job
+    scheduler = AsyncIOScheduler(
+        timezone="UTC", job_defaults={"misfire_grace_time": 300, "coalesce": True}
+    )
     # Hourly: each user gets the reminder when it is 19:00 in their own timezone
     scheduler.add_job(partial(send_daily_reminder, app.bot), "cron", minute=0)
-    scheduler.add_job(process_regular_payments, "cron", hour=0, minute=0)
+    # Hourly as well: a new day starts at a different moment in every timezone
+    scheduler.add_job(process_regular_payments, "cron", minute=0)
     scheduler.start()
 
     await process_regular_payments()
 
 
 async def register_user(telegram_id: int, context):
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/register-telegram/",
-                json={"telegram_id": telegram_id},
-                headers={"Authorization": f"Token {ADMIN_TOKEN}"},
-            )
-    except httpx.HTTPError as e:
+    response = await api_request(
+        "POST", "/register-telegram/", ADMIN_TOKEN, {"telegram_id": telegram_id}
+    )
+    if response is None:
         # API unreachable - the caller shows the "try again later" branch
-        logger.warning("Failed to register %s: %s", telegram_id, e)
         return None
     if response.status_code in (200, 201):
         context.user_data["token"] = response.json()["token"]
@@ -118,124 +231,107 @@ async def register_user(telegram_id: int, context):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if not context.user_data.get("token"):
-        telegram_id = update.effective_user.id
-        await register_user(telegram_id, context)
+    token = context.user_data["token"]
 
     if not context.user_data.get("currency"):
-        profile = await get_user_profile(context.user_data.get("token"))
+        profile = await get_user_profile(token)
         context.user_data["currency"] = profile["currency"]
 
-    if context.user_data.get("state") == "adding_category":
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/categories/",
-                json={"name": text},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
+    state = context.user_data.get("state")
+    if state == "adding_category":
+        response = await api_request("POST", "/categories/", token, {"name": text})
         context.user_data["state"] = None
-        if response.status_code == 201:
+        if response is not None and response.status_code == 201:
             await update.message.reply_text(f"✅ Category '{text}' added!")
         else:
-            await update.message.reply_text("❌ Something went wrong")
+            await update.message.reply_text(error_text(response))
         return
-    elif context.user_data.get("state") == "adding_savings_goal":
-        try:
-            amount = int(text)
-        except ValueError:
+    elif state == "adding_savings_goal":
+        amount = parse_amount(text)
+        if amount is None:
             await update.message.reply_text("Please send a number 💸. Try again")
             return
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/set-savings-goal/",
-                json={"savings_goal": amount},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
+        response = await api_request(
+            "POST", "/set-savings-goal/", token, {"savings_goal": str(amount)}
+        )
         context.user_data["state"] = None
-        if response.status_code == 200:
+        if response is not None and response.status_code == 200:
             await update.message.reply_text("Saving goal added!")
         else:
-            await update.message.reply_text("❌ Something went wrong")
+            await update.message.reply_text(error_text(response))
         return
-    elif context.user_data.get("state") == "adding_income":
-        try:
-            amount = float(text)
-        except ValueError:
-            context.user_data["state"] = None
+    elif state == "adding_income":
+        amount = parse_amount(text)
+        context.user_data["state"] = None
+        if amount is None:
             await update.message.reply_text(
                 "Please send a number 💸. Try again /income"
             )
             return
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/income/",
-                json={"amount": amount},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        context.user_data["state"] = None
-        if response.status_code == 201:
+        response = await api_request("POST", "/income/", token, {"amount": str(amount)})
+        if response is not None and response.status_code == 201:
             await update.message.reply_text("💸Income added!")
         else:
-            await update.message.reply_text("❌ Something went wrong")
+            await update.message.reply_text(error_text(response))
         return
-    elif context.user_data.get("state") == "adding_reg_name":
+    elif state == "adding_reg_name":
         context.user_data["reg_name"] = text
         context.user_data["state"] = "adding_reg_amount"
         await update.message.reply_text("💰 Enter payment amount:")
         return
-    elif context.user_data.get("state") == "adding_reg_amount":
-        try:
-            amount = int(text)
-        except ValueError:
+    elif state == "adding_reg_amount":
+        amount = parse_amount(text)
+        if amount is None:
             context.user_data["state"] = None
             await update.message.reply_text(
                 "Please send a number 💸. Try again /settings"
             )
             return
-        context.user_data["reg_amount"] = amount
+        context.user_data["reg_amount"] = str(amount)
         context.user_data["state"] = "adding_reg_day"
-        await update.message.reply_text("📅 Enter day of a mounth (1 - 31)")
+        await update.message.reply_text("📅 Enter day of a month (1 - 31)")
         return
 
-    elif context.user_data.get("state") == "adding_reg_day":
+    elif state == "adding_reg_day":
+        context.user_data["state"] = None
         try:
             day = int(text)
         except ValueError:
-            context.user_data["state"] = None
             await update.message.reply_text("Please enter a number between 1 and 31")
             return
 
         if 1 <= day <= 31:
-            context.user_data["reg_day"] = day
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{API_URL}/regular-payments/",
-                    json={
-                        "payment_day": context.user_data["reg_day"],
-                        "amount": context.user_data["reg_amount"],
-                        "name": context.user_data["reg_name"],
-                        "category": context.user_data["reg_category_id"],
-                    },
-                    headers={"Authorization": f"Token {context.user_data['token']}"},
-                )
-            context.user_data["state"] = None
-            if response.status_code == 201:
+            response = await api_request(
+                "POST",
+                "/regular-payments/",
+                token,
+                {
+                    "payment_day": day,
+                    "amount": context.user_data["reg_amount"],
+                    "name": context.user_data["reg_name"],
+                    "category": context.user_data["reg_category_id"],
+                },
+            )
+            if response is not None and response.status_code == 201:
                 await update.message.reply_text("✅ Regular payment added!")
             else:
-                await update.message.reply_text("❌ Something went wrong")
+                await update.message.reply_text(error_text(response))
         else:
-            context.user_data["state"] = None
             await update.message.reply_text("❌ Please enter a number between 1 and 31")
         return
-    try:
-        amount = float(text)
-    except ValueError:
+    amount = parse_amount(text)
+    if amount is None:
         await update.message.reply_text("Please send a number 💸")
         return
-    context.user_data["amount"] = amount
-    categories = await get_categories(context.user_data["token"])
+    categories = await get_categories(token)
+    if categories is None:
+        await update.message.reply_text(SERVICE_UNAVAILABLE)
+        return
+    context.user_data["amount"] = str(amount)
+    # callback_data is limited to 64 bytes, so the button carries only the id
+    context.user_data["category_names"] = {cat["id"]: cat["name"] for cat in categories}
     keyboard = [
-        [InlineKeyboardButton(cat["name"], callback_data=f"{cat['id']}:{cat['name']}")]
+        [InlineKeyboardButton(cat["name"], callback_data=f"expcat_{cat['id']}")]
         for cat in categories
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -243,30 +339,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def process_regular_payments():
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/process-regular-payments/",
-                headers={"Authorization": f"Token {ADMIN_TOKEN}"},
-            )
-
-        if response.status_code != 200:
-            logger.error("Regular payments: API returned %s", response.status_code)
-            return
-    except httpx.HTTPError as e:
-        logger.error("Regular payments: API unreachable: %s", e)
+    response = await api_request("POST", "/process-regular-payments/", ADMIN_TOKEN)
+    if response is None:
+        logger.error("Regular payments: API unreachable")
+        return
+    if response.status_code != 200:
+        logger.error("Regular payments: API returned %s", response.status_code)
         return
 
     logger.info("Regular payments processed: %s", response.json())
 
 
-async def send_daily_reminder(bot):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_URL}/all-telegram-ids/",
-            headers={"Authorization": f"Token {ADMIN_TOKEN}"},
+async def deliver_reminder(bot, telegram_id):
+    text = (
+        "🕗 The day is coming to an end, "
+        "time to track your day's expenses!\n"
+        "Disable the reminder in /settings"
+    )
+    try:
+        await bot.send_message(chat_id=telegram_id, text=text)
+    except RetryAfter as e:
+        wait = e.retry_after
+        await asyncio.sleep(
+            wait.total_seconds() if isinstance(wait, timedelta) else wait
         )
+        await bot.send_message(chat_id=telegram_id, text=text)
 
+
+async def send_daily_reminder(bot):
+    response = await api_request("GET", "/all-telegram-ids/", ADMIN_TOKEN)
+    if response is None:
+        logger.error("Daily reminder: API unreachable")
+        return
     if response.status_code != 200:
         logger.error("Daily reminder: API returned %s", response.status_code)
         return
@@ -285,32 +389,22 @@ async def send_daily_reminder(bot):
         telegram_id = item["telegram_id"]
 
         try:
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=(
-                    "🕗 The day is coming to an end, "
-                    "time to track your day's expenses!\n"
-                    "Disable the reminder in /settings"
-                ),
-            )
+            await deliver_reminder(bot, telegram_id)
             sent += 1
         except Forbidden:
             logger.info("User %s blocked the bot", telegram_id)
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{API_URL}/disable-notifications/",
-                        json={"telegram_id": telegram_id},
-                        headers={"Authorization": f"Token {ADMIN_TOKEN}"},
-                    )
-                    if response.status_code != 200:
-                        logger.warning(
-                            "Notification disabling goes wrong %s, status %s",
-                            telegram_id,
-                            response.status_code,
-                        )
-            except httpx.HTTPError as e:
-                logger.warning("Failed to disable %s: %s", telegram_id, e)
+            response = await api_request(
+                "POST",
+                "/disable-notifications/",
+                ADMIN_TOKEN,
+                {"telegram_id": telegram_id},
+            )
+            if response is not None and response.status_code != 200:
+                logger.warning(
+                    "Disabling notifications failed for %s, status %s",
+                    telegram_id,
+                    response.status_code,
+                )
         except TelegramError as e:
             logger.warning("Failed to notify %s: %s", telegram_id, e)
 
@@ -347,24 +441,14 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_user_profile(token):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_URL}/get-profile/", headers={"Authorization": f"Token {token}"}
-        )
-        if response.status_code == 200:
-            return response.json()
+    response = await api_request("GET", "/get-profile/", token)
+    if response is not None and response.status_code == 200:
+        return response.json()
     return {"currency": "PLN", "savings_goal": None}
 
 
-# CURRENCY_CHOICES = [
-#     ("PLN", "PLN zł"),
-#     ("UAH", "UAH ₴"),
-#     ("EUR", "EUR €"),
-#     ("USD", "USD $"),
-# ]
-
-
 async def handle_settings_callback(query, context):
+    token = context.user_data["token"]
     if query.data == "settings_currency":
         keyboard = [
             [
@@ -380,19 +464,16 @@ async def handle_settings_callback(query, context):
         await query.edit_message_text("💱 Choose currency:", reply_markup=reply_markup)
     elif query.data.startswith("currency_"):
         currency = query.data.split("_")[1]
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/set-currency/",
-                json={"currency": currency},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 200:
+        response = await api_request(
+            "POST", "/set-currency/", token, {"currency": currency}
+        )
+        if response is not None and response.status_code == 200:
             context.user_data["currency"] = currency
             await query.edit_message_text(f"✅ Currency set to {currency}!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
     elif query.data == "settings_savings":
-        profile = await get_user_profile(context.user_data["token"])
+        profile = await get_user_profile(token)
         current = profile.get("savings_goal")
         keyboard = []
         if current is not None:
@@ -417,17 +498,13 @@ async def handle_settings_callback(query, context):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.user_data["state"] = "adding_savings_goal"
     elif query.data == "settings_savings_clear":
-        context.user_data["state"] = None
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/set-savings-goal/",
-                json={"savings_goal": None},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 200:
+        response = await api_request(
+            "POST", "/set-savings-goal/", token, {"savings_goal": None}
+        )
+        if response is not None and response.status_code == 200:
             await query.edit_message_text("🗑 Savings goal removed!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
     elif query.data == "settings_categories":
         keyboard = [
             [
@@ -442,7 +519,11 @@ async def handle_settings_callback(query, context):
         context.user_data["state"] = "adding_category"
         await query.edit_message_text("✏️ Enter category name:")
     elif query.data == "cat_delete":
-        categories = await get_categories(context.user_data["token"])
+        categories = await get_categories(token)
+        if categories is None:
+            await query.edit_message_text(SERVICE_UNAVAILABLE)
+            return
+        # shared categories have no owner and cannot be deleted
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -450,22 +531,42 @@ async def handle_settings_callback(query, context):
                 )
             ]
             for cat in categories
+            if cat["user"] is not None
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "Select category to delete:", reply_markup=reply_markup
+        text = "Select category to delete:" if keyboard else "No categories of your own."
+        keyboard.append(
+            [InlineKeyboardButton("⬅️ Back", callback_data="settings_categories")]
         )
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
     elif query.data.startswith("delete_"):
         category_id = query.data.split("_")[1]
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                f"{API_URL}/categories/{category_id}/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 204:
+        response = await api_request("GET", f"/categories/{category_id}/", token)
+        if response is None or response.status_code != 200:
+            await query.edit_message_text(error_text(response))
+            return
+        category = response.json()
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🗑 Yes, delete", callback_data=f"delcat_{category_id}"
+                ),
+                InlineKeyboardButton("⬅️ Back", callback_data="cat_delete"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"Delete '{category['name']}'?\n"
+            f"This also deletes {category['expense_count']} expense(s) and "
+            f"{category['payment_count']} regular payment(s).",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    elif query.data.startswith("delcat_"):
+        category_id = query.data.split("_")[1]
+        response = await api_request("DELETE", f"/categories/{category_id}/", token)
+        if response is not None and response.status_code == 204:
             await query.edit_message_text("✅ Category deleted!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
     elif query.data == "settings_close":
         await query.message.delete()
     elif query.data == "settings_regular":
@@ -480,7 +581,10 @@ async def handle_settings_callback(query, context):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🔄 Regular payments:", reply_markup=reply_markup)
     elif query.data == "reg_add":
-        categories = await get_categories(context.user_data["token"])
+        categories = await get_categories(token)
+        if categories is None:
+            await query.edit_message_text(SERVICE_UNAVAILABLE)
+            return
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -501,79 +605,66 @@ async def handle_settings_callback(query, context):
         reply_markup = get_settings_keyboard()
         await query.edit_message_text("⚙️ Settings", reply_markup=reply_markup)
     elif query.data == "reg_view":
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{API_URL}/regular-payments/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-            payments = response.json()
-            currency = context.user_data.get("currency", "PLN")
-            text = "📋 Your's regular expenses\n\n"
-            for expense in payments:
-                text += f"{expense['name']} — {expense['amount']} {currency} — day {expense['payment_day']} — {expense['category_name']}\n"
-            await query.edit_message_text(text)
+        response = await api_request("GET", "/regular-payments/", token)
+        if response is None or response.status_code != 200:
+            await query.edit_message_text(error_text(response))
+            return
+        currency = context.user_data.get("currency", "PLN")
+        text = "📋 Your regular expenses\n\n"
+        for expense in response.json():
+            text += f"{expense['name']} — {expense['amount']} {currency} — day {expense['payment_day']} — {expense['category_name']}\n"
+        first, *rest = split_text(text)
+        await query.edit_message_text(first)
+        for chunk in rest:
+            await query.message.reply_text(chunk)
     elif query.data.startswith("delreg_"):
         payment_id = query.data.split("_")[1]
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                f"{API_URL}/regular-payments/{payment_id}/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 204:
+        response = await api_request(
+            "DELETE", f"/regular-payments/{payment_id}/", token
+        )
+        if response is not None and response.status_code == 204:
             await query.edit_message_text("✅ Regular payment deleted!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
     elif query.data == "reg_delete":
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{API_URL}/regular-payments/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-            reg_payments = response.json()
-
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        f"🗑 {payment['name']}", callback_data=f"delreg_{payment['id']}"
-                    )
-                ]
-                for payment in reg_payments
+        response = await api_request("GET", "/regular-payments/", token)
+        if response is None or response.status_code != 200:
+            await query.edit_message_text(error_text(response))
+            return
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    f"🗑 {payment['name']}", callback_data=f"delreg_{payment['id']}"
+                )
             ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
-                "Select regular payment to delete:", reply_markup=reply_markup
-            )
+            for payment in response.json()
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Select regular payment to delete:", reply_markup=reply_markup
+        )
     elif query.data == "toggle_notification":
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{API_URL}/get-profile/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-            status = response.json()["notification_status"]
-            status = not status
-            response = await client.post(
-                f"{API_URL}/notification-status/",
-                json={"notification_status": status},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-            if response.status_code == 200:
-                if status == False:
-                    await query.edit_message_text("🔕 Notifications turned off!")
-                elif status == True:
-                    await query.edit_message_text("🔔 Notifications turned on!")
-            else:
-                await query.edit_message_text("❌ Something went wrong, try again")
+        response = await api_request("GET", "/get-profile/", token)
+        if response is None or response.status_code != 200:
+            await query.edit_message_text(error_text(response))
+            return
+        status = not response.json()["notification_status"]
+        response = await api_request(
+            "POST", "/notification-status/", token, {"notification_status": status}
+        )
+        if response is None or response.status_code != 200:
+            await query.edit_message_text(error_text(response))
+        elif status:
+            await query.edit_message_text("🔔 Notifications turned on!")
+        else:
+            await query.edit_message_text("🔕 Notifications turned off!")
     elif query.data.startswith("delexp_"):
         expense_id = query.data.split("_")[1]
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                f"{API_URL}/expenses/{expense_id}/",
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 204:
+        response = await api_request("DELETE", f"/expenses/{expense_id}/", token)
+        if response is not None and response.status_code == 204:
             await query.edit_message_text("🗑 Expense cancelled!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
     elif query.data == "settings_timezone":
         keyboard = [
             [
@@ -606,24 +697,19 @@ async def handle_settings_callback(query, context):
         await query.edit_message_text("🕒 Choose timezone:", reply_markup=reply_markup)
     elif query.data.startswith("settings_tz_set_"):
         zone = query.data.removeprefix("settings_tz_set_")
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{API_URL}/set-timezone/",
-                json={"timezone": zone},
-                headers={"Authorization": f"Token {context.user_data['token']}"},
-            )
-        if response.status_code == 200:
+        response = await api_request("POST", "/set-timezone/", token, {"timezone": zone})
+        if response is not None and response.status_code == 200:
             await query.edit_message_text(f"✅ Timezone set to {zone}!")
         else:
-            await query.edit_message_text("❌ Something went wrong")
+            await query.edit_message_text(error_text(response))
 
 
 async def get_categories(token):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_URL}/categories/", headers={"Authorization": f"Token {token}"}
-        )
-        return response.json()
+    """The user's categories, None if the API did not give them."""
+    response = await api_request("GET", "/categories/", token)
+    if response is None or response.status_code != 200:
+        return None
+    return response.json()
 
 
 async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -632,88 +718,84 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_URL}/stats/",
-            headers={"Authorization": f"Token {context.user_data['token']}"},
-        )
-        data = response.json()
-        if response.status_code == 200:
-            text = f"📊 {data['month']}\n\n"
-            for cat in data["categories"]:
-                text += f"{cat['category__name']} — {cat['total']} {cat['currency']}\n"
-            text += "\n💰 Totals:\n"
-            for currency, amount in data["total"].items():
-                text += f"{currency}: {amount}\n"
-            text += "\n💸 Income:\n"
-            for currency, amount in data["income"].items():
-                text += f"{currency}: {amount}\n"
-            text += f"\n💰 Daily limit: {data['daily_limit']} {data['currency']}\n"
-            if data.get("currency_mismatch"):
-                text += "⚠️ Some income/expenses are in a different currency — daily limit may be inaccurate.\n"
-            await update.message.reply_text(text)
+    response = await api_request("GET", "/stats/", context.user_data["token"])
+    if response is None or response.status_code != 200:
+        await update.message.reply_text(error_text(response))
+        return
+    data = response.json()
+    text = f"📊 {data['month']}\n\n"
+    for cat in data["categories"]:
+        text += f"{cat['category__name']} — {cat['total']} {cat['currency']}\n"
+    text += "\n💰 Totals:\n"
+    for currency, amount in data["total"].items():
+        text += f"{currency}: {amount}\n"
+    text += "\n💸 Income:\n"
+    for currency, amount in data["income"].items():
+        text += f"{currency}: {amount}\n"
+    text += f"\n💰 Daily limit: {data['daily_limit']} {data['currency']}\n"
+    if Decimal(data["daily_limit"]) < 0:
+        text += "⚠️ You are over budget this month.\n"
+    if data.get("currency_mismatch"):
+        text += "⚠️ Some income/expenses are in a different currency — daily limit may be inaccurate.\n"
+    await update.message.reply_text(text)
 
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{API_URL}/history/",
-            headers={"Authorization": f"Token {context.user_data['token']}"},
-        )
-        data = response.json()
-        text = "📋 History\n\n"
-        for expense in data:
-            desc = f" — {expense['description']}" if expense["description"] else ""
-            text += f"{expense['date']} — {expense['category__name']} — {expense['amount']} {expense['currency']} {desc}\n"
-        await update.message.reply_text(text)
+    response = await api_request("GET", "/history/", context.user_data["token"])
+    if response is None or response.status_code != 200:
+        await update.message.reply_text(error_text(response))
+        return
+    text = "📋 History\n\n"
+    for expense in response.json():
+        desc = f" — {expense['description']}" if expense["description"] else ""
+        text += f"{expense['date']} — {expense['category__name']} — {expense['amount']} {expense['currency']} {desc}\n"
+    for chunk in split_text(text):
+        await update.message.reply_text(chunk)
 
 
 async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if (
-        query.data.startswith("settings_")
-        or query.data.startswith("toggle_notification")
-        or query.data.startswith("cat_")
-        or query.data.startswith("delete_")
-        or query.data.startswith("currency_")
-        or query.data.startswith("reg_")
-        or query.data.startswith("regcat_")
-        or query.data.startswith("back_to_settings")
-        or query.data.startswith("delreg_")
-        or query.data.startswith("delexp_")
-    ):
+    # any button abandons the input in progress; the branches that start a new
+    # one set the state themselves
+    context.user_data["state"] = None
+    if query.data.startswith(SETTINGS_CALLBACKS):
         await handle_settings_callback(query, context)
         return
-    amount = context.user_data.get("amount")
-    token = context.user_data.get("token")
-    data = query.data.split(":")
-    category_id = int(data[0])
-    category_name = data[1]
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{API_URL}/expenses/",
-            json={"amount": amount, "category": category_id},
-            headers={"Authorization": f"Token {token}"},
+    if not query.data.startswith("expcat_"):
+        await query.edit_message_text("This button is outdated, please start over.")
+        return
+    # gone after a restart or a double tap; the tap's result stays on screen
+    amount = context.user_data.pop("amount", None)
+    if amount is None:
+        await query.message.reply_text(
+            "💡 To record an expense, just send a number. Example: 100"
         )
+        return
+    category_id = int(query.data.removeprefix("expcat_"))
+    category_name = context.user_data.get("category_names", {}).get(category_id, "")
+    response = await api_request(
+        "POST",
+        "/expenses/",
+        context.user_data["token"],
+        {"amount": amount, "category": category_id},
+    )
     currency = context.user_data.get("currency", "PLN")
-    if response.status_code == 201:
-        expense_id = response.json()["id"]
+    if response is not None and response.status_code == 201:
+        expense = response.json()
         keyboard = [
-            [InlineKeyboardButton("🗑 Cancel", callback_data=f"delexp_{expense_id}")]
+            [InlineKeyboardButton("🗑 Cancel", callback_data=f"delexp_{expense['id']}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             f"✅ Expense saved!\n"
             f"💰 Amount: {amount} {currency} \n"
             f"📂 Category: {category_name}\n"
-            f"📅 Date: {response.json()['date']}",
+            f"📅 Date: {expense['date']}",
             reply_markup=reply_markup,
         )
     else:
-        await query.edit_message_text(
-            "💡 To record an expense, just send a number. Example: 100"
-        )
+        await query.edit_message_text(error_text(response))
 
 
 def main():
@@ -724,7 +806,15 @@ def main():
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(on_startup)
+        .post_shutdown(on_shutdown)
+        .build()
+    )
+    app.add_error_handler(on_error)
+    app.add_handler(TypeHandler(Update, ensure_registered), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_category))
