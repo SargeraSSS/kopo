@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth.models import User
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -10,6 +12,7 @@ CURRENCY_CHOICES = [
     ("EUR", "EUR €"),
     ("USD", "USD $"),
 ]
+POSITIVE_AMOUNT = MinValueValidator(Decimal("0.01"))
 
 
 class Category(models.Model):
@@ -23,7 +26,9 @@ class Category(models.Model):
 
 
 class Expense(models.Model):
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[POSITIVE_AMOUNT]
+    )
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     date = models.DateField(auto_now_add=True)
     description = models.CharField(max_length=50, blank=True, null=True)
@@ -32,7 +37,9 @@ class Expense(models.Model):
 
 
 class Income(models.Model):
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[POSITIVE_AMOUNT]
+    )
     date = models.DateField(auto_now_add=True)
     description = models.CharField(max_length=50, blank=True, null=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -61,7 +68,9 @@ class TelegramUser(models.Model):
 
 
 class RegularPayments(models.Model):
-    amount = models.DecimalField(max_digits=8, decimal_places=2)
+    amount = models.DecimalField(
+        max_digits=8, decimal_places=2, validators=[POSITIVE_AMOUNT]
+    )
     name = models.CharField(max_length=100)
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     payment_day = models.IntegerField(

@@ -95,3 +95,26 @@ def test_regular_payment_invalid_day(api_client):
         },
     )
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("amount", [0, -100])
+@pytest.mark.parametrize("url", ["/api/expenses/", "/api/income/"])
+def test_non_positive_amount_is_rejected(api_client, url, amount):
+    from expenses.models import Category
+
+    category = Category.objects.create(name="Food")
+    response = api_client.post(url, {"amount": amount, "category": category.id})
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_regular_payment_non_positive_amount_is_rejected(api_client):
+    from expenses.models import Category
+
+    category = Category.objects.create(name="Bills")
+    response = api_client.post(
+        "/api/regular-payments/",
+        {"name": "Internet", "amount": 0, "payment_day": 5, "category": category.id},
+    )
+    assert response.status_code == 400
