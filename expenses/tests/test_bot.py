@@ -263,12 +263,11 @@ def test_long_cyrillic_category_fits_into_callback_data(api):
 
 def test_expense_is_saved_from_the_category_button(api):
     api.handler = lambda request: httpx.Response(
-        201, json={"id": 9, "date": "2026-03-10"}
+        201, json={"id": 9, "date": "2026-03-10", "currency": "UAH"}
     )
     ctx = context(
         pending_expenses={KEYBOARD_MESSAGE: "12.50"},
         category_names={5: "Food:out"},
-        currency="UAH",
     )
     update = button_update("expcat_5")
 
@@ -281,7 +280,7 @@ def test_expense_is_saved_from_the_category_button(api):
 
 def test_second_tap_does_not_record_the_expense_twice(api):
     api.handler = lambda request: httpx.Response(
-        201, json={"id": 9, "date": "2026-03-10"}
+        201, json={"id": 9, "date": "2026-03-10", "currency": "UAH"}
     )
     ctx = context(pending_expenses={KEYBOARD_MESSAGE: "10"})
 
@@ -534,7 +533,7 @@ def test_error_log_does_not_contain_the_users_message(api, caplog):
 
 def test_expense_is_saved_even_if_answering_the_button_fails(api):
     api.handler = lambda request: httpx.Response(
-        201, json={"id": 9, "date": "2026-03-10"}
+        201, json={"id": 9, "date": "2026-03-10", "currency": "UAH"}
     )
     update = button_update("expcat_5")
     update.callback_query.answer.side_effect = NetworkError("boom")
@@ -550,7 +549,9 @@ def test_two_open_keyboards_keep_their_own_amounts(api):
     def respond(request):
         if request.method == "GET":
             return category_request("Food")
-        return httpx.Response(201, json={"id": 9, "date": "2026-03-10"})
+        return httpx.Response(
+            201, json={"id": 9, "date": "2026-03-10", "currency": "UAH"}
+        )
 
     api.handler = respond
     ctx = context(currency="PLN")
@@ -582,3 +583,37 @@ def test_stats_uses_the_currency_from_the_profile(api):
     assert "Over today's limit by 30.00 UAH" in text
     assert "Savings goal: 1000.00 UAH" in text
     assert "Balance this month: 850.50 UAH" in text
+
+
+def test_payment_list_after_a_restart_uses_the_profile_currency(api):
+    def respond(request):
+        if request.url.path == "/get-profile/":
+            return httpx.Response(200, json={"currency": "UAH", "savings_goal": None})
+        payment = {
+            "name": "Rent",
+            "amount": "100.00",
+            "payment_day": 1,
+            "category_name": "Home",
+        }
+        return httpx.Response(200, json=[payment])
+
+    api.handler = respond
+    update = button_update("reg_view")
+
+    run(bot.handle_category(update, context()))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "100.00 UAH" in text
+
+
+def test_savings_screen_does_not_invent_a_profile_when_the_api_is_down(api):
+    api.handler = unreachable
+    update = button_update("settings_savings")
+    ctx = context()
+
+    run(bot.handle_category(update, ctx))
+
+    update.callback_query.edit_message_text.assert_awaited_once_with(
+        bot.SERVICE_UNAVAILABLE
+    )
+    assert ctx.user_data["state"] is None

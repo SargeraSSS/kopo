@@ -265,10 +265,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     token = context.user_data["token"]
 
-    if not context.user_data.get("currency"):
-        profile = await get_user_profile(token)
-        context.user_data["currency"] = profile["currency"]
-
     state = context.user_data.get("state")
     if state == "adding_category":
         response = await api_request("POST", "/categories/", token, {"name": text})
@@ -477,10 +473,11 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_user_profile(token):
+    """The user's profile, None if the API did not give it."""
     response = await api_request("GET", "/get-profile/", token)
     if response is not None and response.status_code == 200:
         return response.json()
-    return {"currency": "PLN", "savings_goal": None}
+    return None
 
 
 async def handle_settings_callback(query, context):
@@ -504,13 +501,15 @@ async def handle_settings_callback(query, context):
             "POST", "/set-currency/", token, {"currency": currency}
         )
         if response is not None and response.status_code == 200:
-            context.user_data["currency"] = currency
             await query.edit_message_text(f"✅ Currency set to {currency}!")
         else:
             await query.edit_message_text(error_text(response))
     elif query.data == "settings_savings":
         profile = await get_user_profile(token)
-        current = profile.get("savings_goal")
+        if profile is None:
+            await query.edit_message_text(SERVICE_UNAVAILABLE)
+            return
+        current = profile["savings_goal"]
         keyboard = []
         if current is not None:
             keyboard.append(
@@ -528,7 +527,7 @@ async def handle_settings_callback(query, context):
         else:
             text = (
                 f"🎯 Current goal: {float(current):.2f} "
-                f"{profile.get('currency', 'PLN')}\n"
+                f"{profile['currency']}\n"
                 "Enter a new savings goal for this month:"
             )
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -645,7 +644,11 @@ async def handle_settings_callback(query, context):
         if response is None or response.status_code != 200:
             await query.edit_message_text(error_text(response))
             return
-        currency = context.user_data.get("currency", "PLN")
+        profile = await get_user_profile(token)
+        if profile is None:
+            await query.edit_message_text(SERVICE_UNAVAILABLE)
+            return
+        currency = profile["currency"]
         text = "📋 Your regular expenses\n\n"
         for expense in response.json():
             text += f"{expense['name']} — {expense['amount']} {currency} — day {expense['payment_day']} — {expense['category_name']}\n"
@@ -831,7 +834,6 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["token"],
         {"amount": amount, "category": category_id},
     )
-    currency = context.user_data.get("currency", "PLN")
     if response is not None and response.status_code == 201:
         expense = response.json()
         keyboard = [
@@ -840,7 +842,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             f"✅ Expense saved!\n"
-            f"💰 Amount: {amount} {currency} \n"
+            f"💰 Amount: {amount} {expense['currency']} \n"
             f"📂 Category: {category_name}\n"
             f"📅 Date: {expense['date']}",
             reply_markup=reply_markup,
