@@ -16,7 +16,7 @@ from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from expenses.models import Category, Expense, RegularPayments
+from expenses.models import Category, Expense, RegularPayments, UserProfile
 
 URL = "/api/process-regular-payments/"
 
@@ -111,3 +111,33 @@ def test_day_31_is_charged_on_the_last_day_of_a_short_month(admin_client, user):
     with on(2026, 2, 28):
         admin_client.post(URL)
     assert Expense.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_name_longer_than_expense_description_does_not_block_others(
+    admin_client, user
+):
+    """A 100-char name must not abort the whole run for every other user."""
+    other = User.objects.create_user(username="other", password="pass123")
+    long_named = make_payment(user, payment_day=1)
+    long_named.name = "x" * 100
+    long_named.save()
+    make_payment(other, payment_day=1)
+
+    with on(2026, 3, 10):
+        response = admin_client.post(URL)
+
+    assert response.status_code == 200
+    assert Expense.objects.get(user=user).description == "x" * 50
+    assert Expense.objects.filter(user=other).count() == 1
+
+
+@pytest.mark.django_db
+def test_expense_takes_the_currency_from_the_profile(admin_client, user):
+    UserProfile.objects.create(user=user, currency="UAH")
+    make_payment(user, payment_day=1)
+
+    with on(2026, 3, 10):
+        admin_client.post(URL)
+
+    assert Expense.objects.get(user=user).currency == "UAH"

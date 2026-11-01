@@ -154,18 +154,24 @@ def process_regular_payments(request):
     today = timezone.localdate()
     first_month_day = today.replace(day=1)
     last_month_day = calendar.monthrange(today.year, today.month)[1]
-    payments = RegularPayments.objects.filter(
-        Q(last_charged__isnull=True) | Q(last_charged__lt=first_month_day)
+    description_length = Expense._meta.get_field("description").max_length
+    # "of" keeps the lock off the outer-joined profile, Postgres refuses that
+    payments = (
+        RegularPayments.objects.select_for_update(of=("self",))
+        .select_related("user__userprofile")
+        .filter(Q(last_charged__isnull=True) | Q(last_charged__lt=first_month_day))
     )
     if today.day != last_month_day:
         payments = payments.filter(payment_day__lte=today.day)
     with transaction.atomic():
         for payment in payments:
+            profile = getattr(payment.user, "userprofile", None)
             Expense.objects.create(
                 amount=payment.amount,
-                category=payment.category,
+                category_id=payment.category_id,
                 user=payment.user,
-                description=payment.name,
+                description=payment.name[:description_length],
+                currency=profile.currency if profile else "PLN",
             )
             payment.last_charged = today
             payment.save()
