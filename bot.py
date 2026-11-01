@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import partial
@@ -33,6 +34,8 @@ API_URL = os.getenv("API_URL")
 # One client for the whole bot: it keeps connections to the API open
 api_client = httpx.AsyncClient(timeout=10)
 
+FLOOD_LIMIT = 30
+FLOOD_WINDOW_SECONDS = 60
 SERVICE_UNAVAILABLE = "⚠️ Service is unavailable. Please try again later."
 SOMETHING_WRONG = "❌ Something went wrong"
 SETTINGS_CALLBACKS = (
@@ -150,6 +153,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(SERVICE_UNAVAILABLE)
+
+
+async def antiflood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Drop updates over the limit before they cost an API call.
+
+    Runs first, protects only the Telegram path; the API has its own throttle.
+    """
+    if update.effective_user is None:
+        return
+    now = time.monotonic()
+    recent = [
+        moment
+        for moment in context.user_data.get("recent_updates", [])
+        if now - moment < FLOOD_WINDOW_SECONDS
+    ]
+    recent.append(now)
+    context.user_data["recent_updates"] = recent
+    if len(recent) <= FLOOD_LIMIT:
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    # one warning per flood, answering each message would be a flood of our own
+    if len(recent) == FLOOD_LIMIT + 1 and update.effective_message:
+        await update.effective_message.reply_text(
+            "⏳ Too many messages. Please wait a minute."
+        )
+    raise ApplicationHandlerStop
 
 
 async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -814,6 +844,7 @@ def main():
         .build()
     )
     app.add_error_handler(on_error)
+    app.add_handler(TypeHandler(Update, antiflood), group=-2)
     app.add_handler(TypeHandler(Update, ensure_registered), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

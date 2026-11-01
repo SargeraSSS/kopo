@@ -425,3 +425,47 @@ def test_error_handler_ignores_a_double_tap(api):
     run(bot.on_error(update, SimpleNamespace(error=error)))
 
     update.effective_message.reply_text.assert_not_called()
+
+
+def test_antiflood_lets_normal_use_through(api):
+    ctx = context()
+
+    for _ in range(bot.FLOOD_LIMIT):
+        run(bot.antiflood(message_update("100"), ctx))
+
+
+def test_antiflood_warns_once_and_stops_the_rest(api):
+    ctx = context()
+    for _ in range(bot.FLOOD_LIMIT):
+        run(bot.antiflood(message_update("100"), ctx))
+
+    first, second = message_update("100"), message_update("100")
+    with pytest.raises(ApplicationHandlerStop):
+        run(bot.antiflood(first, ctx))
+    with pytest.raises(ApplicationHandlerStop):
+        run(bot.antiflood(second, ctx))
+
+    first.message.reply_text.assert_awaited_once()
+    second.message.reply_text.assert_not_called()
+
+
+def test_antiflood_forgets_old_messages(api, monkeypatch):
+    ctx = context()
+    for _ in range(bot.FLOOD_LIMIT):
+        run(bot.antiflood(message_update("100"), ctx))
+
+    later = bot.time.monotonic() + bot.FLOOD_WINDOW_SECONDS + 1
+    monkeypatch.setattr(bot.time, "monotonic", lambda: later)
+
+    run(bot.antiflood(message_update("100"), ctx))
+
+
+def test_antiflood_counts_each_user_separately(api):
+    busy = context()
+    for _ in range(bot.FLOOD_LIMIT + 1):
+        try:
+            run(bot.antiflood(message_update("100"), busy))
+        except ApplicationHandlerStop:
+            pass
+
+    run(bot.antiflood(message_update("100", user_id=2), context()))

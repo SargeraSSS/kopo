@@ -8,7 +8,11 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import (
+    api_view,
+    permission_classes,
+    throttle_classes,
+)
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -28,6 +32,7 @@ from .serializers import (
     RegularPaymentsSerializer,
     UserProfileSerializer,
 )
+from .throttles import TelegramIdThrottle
 
 
 def month_range(day):
@@ -127,8 +132,10 @@ class RegularPaymentsViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user, last_charged=today if passed else None)
 
 
+# The bot's own jobs share one admin token: a user limit would silently stop them
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
+@throttle_classes([])
 def disable_notifications(request):
     telegram_id = request.data.get("telegram_id")
     if telegram_id is None:
@@ -148,6 +155,7 @@ def disable_notifications(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
+@throttle_classes([TelegramIdThrottle])
 def register_telegram_user(request):
     telegram_id = request.data.get("telegram_id")
     if telegram_id is None:
@@ -177,6 +185,7 @@ def register_telegram_user(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
+@throttle_classes([])
 def process_regular_payments(request):
     """Charge due payments. Safe to repeat: the bot calls it every hour, because
     the local day starts at a different moment in every timezone."""
@@ -225,6 +234,7 @@ def process_regular_payments(request):
 
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
+@throttle_classes([])
 def get_telegram_id(request):
     tg_user = TelegramUser.objects.all()
     ids = tg_user.values_list(

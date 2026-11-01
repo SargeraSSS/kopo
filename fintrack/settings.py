@@ -135,11 +135,30 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+# Throttle counters live in the cache. Process memory (the fallback for tests
+# and local runs) gives every gunicorn worker its own counter, so production
+# sets REDIS_URL.
+REDIS_URL = os.getenv("REDIS_URL")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.UserRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {
+        "user": "120/minute",
+        "registration": "10/minute",
+    },
 }
 
 LOGGING = {
