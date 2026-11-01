@@ -6,7 +6,7 @@ A personal finance tracker you control entirely through Telegram — log expense
 
 
 ​```
-Telegram Bot  →  Django REST API  →  PostgreSQL
+Telegram Bot  →  Django REST API  →  PostgreSQL, Redis
 ​```
 
 ## Features
@@ -20,7 +20,7 @@ Telegram Bot  →  Django REST API  →  PostgreSQL
 
 ## Tech stack
 
-**Backend:** Django, Django REST Framework, PostgreSQL, Token auth
+**Backend:** Django, Django REST Framework, PostgreSQL, Redis (rate limiting), Token auth
 **Bot:** python-telegram-bot, httpx, APScheduler (background jobs)
 **Testing:** pytest, pytest-django
 **Infra:** Docker, Docker Compose, GitHub Actions (CI), deployed on a Hetzner VPS

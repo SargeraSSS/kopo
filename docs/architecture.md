@@ -3,7 +3,7 @@
 ```
 Telegram user ⇄ Telegram ⇄ bot.py (polling) ──HTTP, Token auth──▶ Django REST API ──▶ PostgreSQL
                               │
-                              └─ APScheduler: daily reminder (hourly, 19:00 user-local), regular payments (00:00 + on startup)
+                              └─ APScheduler: daily reminder (hourly, 19:00 user-local), regular payments (hourly + on startup)
 ```
 
 The project is two processes sharing one codebase:
@@ -51,7 +51,7 @@ The project is two processes sharing one codebase:
 - Sending a plain number starts an expense: the bot stores the amount and shows category buttons; the chosen category posts the expense, with a 🗑 Cancel button to delete it.
 - Multi-step input (new category, savings goal, income, regular payment name → amount → day) is a small state machine in `context.user_data["state"]`.
 - Inline-button callbacks are routed by `callback_data` prefix (`settings_`, `cat_`, `currency_`, `reg_`, `delexp_`, …) into `handle_settings_callback`.
-- `user_data` lives in process memory: after a bot restart the token is re-fetched on the next message and any half-finished input is lost.
+- `user_data` lives in process memory: after a bot restart the token is re-fetched before the next update of any kind and any half-finished input is lost.
 
 ## Scheduled jobs (APScheduler, in the bot process)
 
