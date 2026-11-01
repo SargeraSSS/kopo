@@ -566,3 +566,19 @@ def test_two_open_keyboards_keep_their_own_amounts(api):
 
     saved = [json.loads(r.content) for r in api.calls if r.method == "POST"]
     assert [expense["amount"] for expense in saved] == ["10", "19"]
+
+
+def test_stats_uses_the_currency_from_the_profile(api):
+    text = stats_text(
+        api,
+        currency="UAH",
+        savings_goal=1000.0,
+        spent_today=130.0,
+        left_today=-30.0,
+    )
+
+    assert "PLN" not in text
+    assert "Daily limit: 100.00 UAH" in text
+    assert "Over today's limit by 30.00 UAH" in text
+    assert "Savings goal: 1000.00 UAH" in text
+    assert "Balance this month: 850.50 UAH" in text

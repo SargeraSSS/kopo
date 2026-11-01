@@ -320,3 +320,32 @@ def test_stats_has_no_goal_when_none_is_set(api_client, user):
     UserProfile.objects.create(user=user)
 
     assert stats_on_the_29th(api_client)["savings_goal"] is None
+
+
+@pytest.mark.django_db
+def test_stats_counts_in_the_profile_currency(api_client, user, category):
+    UserProfile.objects.create(user=user, currency="UAH")
+    Income.objects.create(
+        user=user, amount=300, currency="UAH", date=date(2026, 3, 1)
+    )
+    Expense.objects.create(
+        user=user,
+        amount=30,
+        category=category,
+        currency="UAH",
+        date=date(2026, 3, 29),
+    )
+    Expense.objects.create(
+        user=user,
+        amount=500,
+        category=category,
+        currency="PLN",
+        date=date(2026, 3, 29),
+    )
+
+    data = stats_on_the_29th(api_client)
+
+    assert data["currency"] == "UAH"
+    assert data["spent_today"] == Decimal("30.00")
+    assert data["daily_limit"] == Decimal("100.00")
+    assert data["left_today"] == Decimal("70.00")
