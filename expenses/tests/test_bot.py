@@ -484,3 +484,16 @@ def test_error_log_does_not_contain_the_users_message(api, caplog):
 
     assert "Update 42 failed" in caplog.text
     assert "my secret spending" not in caplog.text
+
+
+def test_expense_is_saved_even_if_answering_the_button_fails(api):
+    api.handler = lambda request: httpx.Response(
+        201, json={"id": 9, "date": "2026-03-10"}
+    )
+    update = button_update("expcat_5")
+    update.callback_query.answer.side_effect = NetworkError("boom")
+
+    run(bot.handle_category(update, context(amount="10")))
+
+    assert len(api.calls) == 1
+    update.callback_query.edit_message_text.assert_awaited_once()

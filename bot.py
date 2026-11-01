@@ -787,7 +787,11 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    # only stops the spinner on the button: not worth losing the user's tap
+    try:
+        await query.answer()
+    except TelegramError as e:
+        logger.warning("Failed to answer a button: %s", e)
     # any button abandons the input in progress; the branches that start a new
     # one set the state themselves
     context.user_data["state"] = None
