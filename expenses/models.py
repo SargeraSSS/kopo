@@ -37,6 +37,9 @@ class Expense(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="PLN")
 
+    class Meta:
+        indexes = [models.Index(fields=["user", "-date"])]
+
 
 class Income(models.Model):
     amount = models.DecimalField(
@@ -46,6 +49,9 @@ class Income(models.Model):
     description = models.CharField(max_length=50, blank=True, null=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="PLN")
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "-date"])]
 
 
 class UserProfile(models.Model):
