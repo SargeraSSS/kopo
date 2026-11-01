@@ -159,3 +159,26 @@ def test_all_telegram_ids_returns_the_users_timezone(admin_client):
         for item in admin_client.get("/api/all-telegram-ids/").data
     }
     assert zones[TELEGRAM_ID] == "Europe/Kyiv"
+
+
+@pytest.mark.django_db
+def test_backfill_creates_profiles_only_where_missing():
+    from importlib import import_module
+
+    from django.apps import apps
+
+    from expenses.models import TelegramUser, UserProfile
+
+    backfill = import_module(
+        "expenses.migrations.0021_create_missing_profiles"
+    ).create_missing_profiles
+    without = User.objects.create_user(username="tg_1")
+    TelegramUser.objects.create(user=without, telegram_id=1)
+    existing = User.objects.create_user(username="tg_2")
+    TelegramUser.objects.create(user=existing, telegram_id=2)
+    UserProfile.objects.create(user=existing, currency="UAH")
+
+    backfill(apps, None)
+
+    assert UserProfile.objects.get(user=without).notification_status is True
+    assert UserProfile.objects.get(user=existing).currency == "UAH"

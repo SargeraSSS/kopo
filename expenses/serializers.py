@@ -6,16 +6,19 @@ from .models import (
     Expense,
     Income,
     RegularPayments,
-    TelegramUser,
     UserProfile,
 )
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    # filled only on retrieve, see CategoryViewSet.get_queryset
+    expense_count = serializers.IntegerField(read_only=True)
+    payment_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Category
         read_only_fields = ["user"]
-        fields = ["user", "id", "name"]
+        fields = ["user", "id", "name", "expense_count", "payment_count"]
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
@@ -87,10 +90,3 @@ class RegularPaymentsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid category")
 
         return value
-
-
-class TelegramUserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TelegramUser
-        read_only_fields = ["user"]
-        fields = ["user", "telegram_id"]

@@ -4,7 +4,7 @@ from decimal import ROUND_FLOOR, Decimal
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
@@ -41,7 +41,20 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if self.action in ("list", "retrieve"):
+        if self.action == "retrieve":
+            return Category.objects.filter(
+                Q(user=user) | Q(user__isnull=True)
+            ).annotate(
+                expense_count=Count(
+                    "expense", filter=Q(expense__user=user), distinct=True
+                ),
+                payment_count=Count(
+                    "regularpayments",
+                    filter=Q(regularpayments__user=user),
+                    distinct=True,
+                ),
+            )
+        if self.action == "list":
             return Category.objects.filter(Q(user=user) | Q(user__isnull=True))
         return Category.objects.filter(user=user)
 
@@ -91,12 +104,11 @@ class IncomeViewSet(viewsets.ModelViewSet):
 class UserProfileViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = UserProfileSerializer
+    # profiles are created on registration, never through this endpoint
+    http_method_names = ["get", "patch", "head", "options"]
 
     def get_queryset(self):
         return UserProfile.objects.filter(user=self.request.user)
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
 
 # Regular payments - each user manages their own
@@ -130,9 +142,8 @@ def disable_notifications(request):
         UserProfile.objects.filter(
             user__telegram_profile__telegram_id=telegram_id
         ).update(notification_status=False)
-        return Response("Notifications is disabled", status=200)
-    else:
-        return Response("Something gone wrong in notification disabling", status=404)
+        return Response({"status": "Notifications disabled"}, status=200)
+    return Response({"error": "Telegram user not found"}, status=404)
 
 
 @api_view(["POST"])
@@ -292,55 +303,40 @@ def get_history(request):
     return Response(list(expenses))
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def notification_status(request):
+def update_profile(request):
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
     serializer = UserProfileSerializer(profile, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def notification_status(request):
+    return update_profile(request)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_currency(request):
-    profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
+    return update_profile(request)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_timezone(request):
-    profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
+    return update_profile(request)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def set_savings_goal(request):
-    profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
+    return update_profile(request)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_profile(request):
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    return Response(
-        {
-            "currency": profile.currency,
-            "savings_goal": profile.savings_goal,
-            "notification_status": profile.notification_status,
-            "timezone": profile.timezone,
-        }
-    )
+    return Response(UserProfileSerializer(profile).data)

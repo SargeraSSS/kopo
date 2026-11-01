@@ -196,3 +196,29 @@ def test_regular_payments_list_hides_other_users_payments(two_users):
 
     assert response.status_code == 200
     assert len(response.data) == 0
+
+
+@pytest.mark.django_db
+def test_retrieve_counts_what_deleting_would_remove(api_client, user):
+    category = Category.objects.create(name="Mine", user=user)
+    Expense.objects.create(amount=10, category=category, user=user)
+    Expense.objects.create(amount=20, category=category, user=user)
+    RegularPayments.objects.create(
+        amount=5, name="Flat", category=category, payment_day=1, user=user
+    )
+
+    response = api_client.get(f"/api/categories/{category.id}/")
+
+    assert response.data["expense_count"] == 2
+    assert response.data["payment_count"] == 1
+
+
+@pytest.mark.django_db
+def test_retrieve_does_not_count_other_users_in_a_shared_category(api_client, user):
+    other = User.objects.create_user(username="someone", password="pass123")
+    shared = Category.objects.create(name="Shared")
+    Expense.objects.create(amount=10, category=shared, user=other)
+
+    response = api_client.get(f"/api/categories/{shared.id}/")
+
+    assert response.data["expense_count"] == 0

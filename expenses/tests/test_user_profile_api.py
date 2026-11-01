@@ -219,3 +219,25 @@ def test_settings_require_auth():
         anonymous.post("/api/notification-status/", {"notification_status": True}).status_code
         == 401
     )
+
+
+@pytest.mark.django_db
+def test_profile_cannot_be_created_twice(api_client, user):
+    """The second POST used to be a 500 from the OneToOne constraint."""
+    UserProfile.objects.create(user=user)
+
+    response = api_client.post("/api/user-profile/", {"currency": "UAH"})
+
+    assert response.status_code == 405
+
+
+@pytest.mark.django_db
+def test_get_profile_matches_the_setters_format(api_client, user):
+    set_response = api_client.post(
+        "/api/set-savings-goal/", {"savings_goal": 250}, format="json"
+    )
+
+    response = api_client.get("/api/get-profile/")
+
+    assert response.data["savings_goal"] == "250.00"
+    assert response.data == set_response.data
