@@ -13,6 +13,9 @@ from telegram.ext import ApplicationHandlerStop
 import bot
 
 
+KEYBOARD_MESSAGE = 77
+
+
 def run(coroutine):
     return asyncio.run(coroutine)
 
@@ -51,6 +54,7 @@ def message_update(text, user_id=1):
 def button_update(data):
     query = mock.AsyncMock()
     query.data = data
+    query.message.message_id = KEYBOARD_MESSAGE
     return SimpleNamespace(
         message=None,
         callback_query=query,
@@ -261,7 +265,11 @@ def test_expense_is_saved_from_the_category_button(api):
     api.handler = lambda request: httpx.Response(
         201, json={"id": 9, "date": "2026-03-10"}
     )
-    ctx = context(amount="12.50", category_names={5: "Food:out"}, currency="UAH")
+    ctx = context(
+        pending_expenses={KEYBOARD_MESSAGE: "12.50"},
+        category_names={5: "Food:out"},
+        currency="UAH",
+    )
     update = button_update("expcat_5")
 
     run(bot.handle_category(update, ctx))
@@ -275,7 +283,7 @@ def test_second_tap_does_not_record_the_expense_twice(api):
     api.handler = lambda request: httpx.Response(
         201, json={"id": 9, "date": "2026-03-10"}
     )
-    ctx = context(amount="10")
+    ctx = context(pending_expenses={KEYBOARD_MESSAGE: "10"})
 
     run(bot.handle_category(button_update("expcat_5"), ctx))
     run(bot.handle_category(button_update("expcat_5"), ctx))
@@ -286,7 +294,8 @@ def test_second_tap_does_not_record_the_expense_twice(api):
 def test_outdated_button_format_does_not_crash(api):
     update = button_update("5:Food")
 
-    run(bot.handle_category(update, context(amount="10")))
+    ctx = context(pending_expenses={KEYBOARD_MESSAGE: "10"})
+    run(bot.handle_category(update, ctx))
 
     assert api.calls == []
     update.callback_query.edit_message_text.assert_awaited_once()
@@ -493,7 +502,30 @@ def test_expense_is_saved_even_if_answering_the_button_fails(api):
     update = button_update("expcat_5")
     update.callback_query.answer.side_effect = NetworkError("boom")
 
-    run(bot.handle_category(update, context(amount="10")))
+    ctx = context(pending_expenses={KEYBOARD_MESSAGE: "10"})
+    run(bot.handle_category(update, ctx))
 
     assert len(api.calls) == 1
     update.callback_query.edit_message_text.assert_awaited_once()
+
+
+def test_two_open_keyboards_keep_their_own_amounts(api):
+    def respond(request):
+        if request.method == "GET":
+            return category_request("Food")
+        return httpx.Response(201, json={"id": 9, "date": "2026-03-10"})
+
+    api.handler = respond
+    ctx = context(currency="PLN")
+    for amount, message_id in (("10", 1), ("19", 2)):
+        update = message_update(amount)
+        update.message.reply_text.return_value = SimpleNamespace(message_id=message_id)
+        run(bot.handle_message(update, ctx))
+
+    for message_id in (1, 2):
+        tap = button_update("expcat_5")
+        tap.callback_query.message.message_id = message_id
+        run(bot.handle_category(tap, ctx))
+
+    saved = [json.loads(r.content) for r in api.calls if r.method == "POST"]
+    assert [expense["amount"] for expense in saved] == ["10", "19"]

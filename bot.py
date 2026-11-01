@@ -359,7 +359,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if categories is None:
         await update.message.reply_text(SERVICE_UNAVAILABLE)
         return
-    context.user_data["amount"] = str(amount)
     # callback_data is limited to 64 bytes, so the button carries only the id
     context.user_data["category_names"] = {cat["id"]: cat["name"] for cat in categories}
     keyboard = [
@@ -367,7 +366,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for cat in categories
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select category:", reply_markup=reply_markup)
+    sent = await update.message.reply_text(
+        "Select category:", reply_markup=reply_markup
+    )
+    # keyed by message: several keyboards can be open, each with its own amount
+    pending = context.user_data.setdefault("pending_expenses", {})
+    pending[sent.message_id] = str(amount)
 
 
 async def process_regular_payments():
@@ -802,7 +806,8 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("This button is outdated, please start over.")
         return
     # gone after a restart or a double tap; the tap's result stays on screen
-    amount = context.user_data.pop("amount", None)
+    pending = context.user_data.get("pending_expenses", {})
+    amount = pending.pop(query.message.message_id, None)
     if amount is None:
         await query.message.reply_text(
             "💡 To record an expense, just send a number. Example: 100"
