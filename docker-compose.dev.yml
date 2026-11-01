@@ -1,0 +1,16 @@
+# Local development only. Enable with COMPOSE_FILE in the local .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  web:
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - .:/app
+
+  bot:
+    volumes:
+      - .:/app

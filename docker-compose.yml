@@ -1,5 +1,18 @@
+# Production by default: nothing here is published to the outside world.
+# The bot polls Telegram and reaches the API over the internal network.
+# Docker bypasses ufw, so a published port would be open despite the firewall.
+# Local ports and live code are in docker-compose.dev.yml.
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   db:
+    <<: *service
     image: postgres:16
     environment:
       POSTGRES_DB: ${DB_NAME}
@@ -7,42 +20,51 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  redis:
+    <<: *service
+    image: redis:7-alpine
+    # only throttle counters live here, nothing worth persisting
+    command: redis-server --save "" --appendonly no --maxmemory 64mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   web:
+    <<: *service
     build: .
-    command: sh -c "python manage.py collectstatic --noinput && gunicorn fintrack.wsgi:application --bind 0.0.0.0:8000"
-    volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn fintrack.wsgi:application --bind 0.0.0.0:8000 --workers 2"
     env_file:
       - .env
     environment:
       DB_HOST: db
+      DB_PORT: 5432
       ALLOWED_HOSTS: web,localhost,127.0.0.1
+      REDIS_URL: redis://redis:6379/0
     healthcheck:
-      # gunicorn listens only after collectstatic finishes
+      # gunicorn listens only after migrate and collectstatic finish
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8000), 2)"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 10s
+      start_period: 15s
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   bot:
+    <<: *service
     build: .
     command: python bot.py
-    volumes:
-      - .:/app
     env_file:
       - .env
     environment:
