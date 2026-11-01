@@ -28,7 +28,7 @@ Currencies: `PLN`, `UAH`, `EUR`, `USD`.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/stats/` | user | Current month in the user's timezone: `month`, `categories` (per category and currency totals), `total` and `income` (per currency), `daily_limit` (negative when over budget), `currency`, `currency_mismatch` |
+| GET | `/api/stats/` | user | Current month in the user's timezone: `month`, `categories` (per category and currency totals), `total` and `income` (per currency), `daily_limit`, `spent_today`, `left_today`, `savings_goal`, `month_balance`, `currency`, `currency_mismatch`. `daily_limit` = (income − goal − expenses before today) / days left including today, negative when over budget. `left_today` = `daily_limit` − `spent_today`, `month_balance` = income − expenses. All of these are in the profile currency |
 | GET | `/api/history/` | user | This month's expenses, newest first: `amount`, `category__name`, `date`, `description`, `currency` |
 | GET | `/api/get-profile/` | user | Same body as the setters below |
 | POST | `/api/set-currency/` | user | `{"currency": "EUR"}` → updated profile |

@@ -388,24 +388,61 @@ def test_long_history_is_sent_in_several_messages(api):
     assert all(len(call.args[0]) <= 4096 for call in sent)
 
 
-def test_stats_warns_when_over_budget(api):
-    api.handler = lambda request: httpx.Response(
-        200,
-        json={
-            "month": "March 2026",
-            "categories": [],
-            "total": {},
-            "income": {},
-            "daily_limit": "-3.34",
-            "currency": "PLN",
-            "currency_mismatch": False,
-        },
-    )
+def stats_text(api, **fields):
+    body = {
+        "month": "March 2026",
+        "categories": [],
+        "total": {},
+        "income": {},
+        "daily_limit": 100.0,
+        "spent_today": 30.0,
+        "left_today": 70.0,
+        "savings_goal": None,
+        "month_balance": 850.5,
+        "currency": "PLN",
+        "currency_mismatch": False,
+    }
+    api.handler = lambda request: httpx.Response(200, json={**body, **fields})
     update = message_update("/stats")
 
     run(bot.stats(update, context()))
 
-    assert "over budget" in update.message.reply_text.await_args.args[0]
+    return update.message.reply_text.await_args.args[0]
+
+
+def test_stats_shows_what_is_left_today(api):
+    text = stats_text(api)
+
+    assert "Daily limit: 100.00 PLN" in text
+    assert "Spent today: 30.00 PLN" in text
+    assert "Left today: 70.00 PLN" in text
+
+
+def test_stats_warns_when_over_todays_limit(api):
+    text = stats_text(api, spent_today=130.0, left_today=-30.0)
+
+    assert "Over today's limit by 30.00 PLN" in text
+    assert "Left today" not in text
+
+
+def test_stats_warns_when_over_budget(api):
+    text = stats_text(api, daily_limit=-3.34, left_today=-33.34)
+
+    assert "over budget" in text
+
+
+def test_stats_shows_the_savings_goal_when_set(api):
+    text = stats_text(api, savings_goal=1000.0)
+
+    assert "Savings goal: 1000.00 PLN" in text
+    assert "Balance this month: 850.50 PLN" in text
+
+
+def test_stats_hides_the_goal_lines_without_a_goal(api):
+    text = stats_text(api)
+
+    assert "Savings goal" not in text
+    assert "Balance this month" not in text
 
 
 def test_stats_answers_when_the_api_is_down(api):

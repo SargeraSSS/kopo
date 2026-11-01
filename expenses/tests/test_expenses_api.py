@@ -66,11 +66,13 @@ def test_stats_daily_limit(api_client, user):
     now = datetime.now()
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     remaining_days = days_in_month - now.day + 1
-    expected_limit = (Decimal(6000 - 1000 - 2000) / remaining_days).quantize(
+    # the 2000 was spent today, so it shows in left_today and not in the limit
+    expected_limit = (Decimal(6000 - 1000) / remaining_days).quantize(
         Decimal("0.01"), rounding=ROUND_FLOOR
     )
 
     assert response.data["daily_limit"] == expected_limit
+    assert response.data["left_today"] == expected_limit - 2000
 
 
 @pytest.mark.django_db

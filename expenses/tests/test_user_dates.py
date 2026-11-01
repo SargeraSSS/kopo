@@ -223,3 +223,100 @@ def test_new_payment_due_today_is_charged_this_month(
         admin_client.post("/api/process-regular-payments/")
 
     assert Expense.objects.count() == 1
+
+
+def stats_on_the_29th(client):
+    # 29, 30 and 31 March remain
+    with at(2026, 3, 29, 12, 0):
+        return client.get("/api/stats/").data
+
+
+@pytest.fixture
+def budget(user):
+    UserProfile.objects.create(user=user, savings_goal=100)
+    Income.objects.create(user=user, amount=400, date=date(2026, 3, 1))
+    return user
+
+
+@pytest.mark.django_db
+def test_spending_today_does_not_move_the_daily_limit(api_client, budget, category):
+    before = stats_on_the_29th(api_client)
+    Expense.objects.create(
+        user=budget, amount=30, category=category, date=date(2026, 3, 29)
+    )
+
+    after = stats_on_the_29th(api_client)
+
+    assert before["daily_limit"] == after["daily_limit"] == Decimal("100.00")
+    assert before["left_today"] == Decimal("100.00")
+    assert after["spent_today"] == Decimal("30.00")
+    assert after["left_today"] == Decimal("70.00")
+
+
+@pytest.mark.django_db
+def test_spending_yesterday_lowers_the_daily_limit(api_client, budget, category):
+    Expense.objects.create(
+        user=budget, amount=30, category=category, date=date(2026, 3, 28)
+    )
+
+    data = stats_on_the_29th(api_client)
+
+    assert data["daily_limit"] == Decimal("90.00")
+    assert data["spent_today"] == 0
+
+
+@pytest.mark.django_db
+def test_left_today_goes_negative_when_over_the_limit(api_client, budget, category):
+    Expense.objects.create(
+        user=budget, amount=130, category=category, date=date(2026, 3, 29)
+    )
+
+    assert stats_on_the_29th(api_client)["left_today"] == Decimal("-30.00")
+
+
+@pytest.mark.django_db
+def test_spent_today_follows_the_users_day(api_client, kyiv_user, category):
+    Expense.objects.create(
+        user=kyiv_user, amount=30, category=category, date=date(2026, 3, 10)
+    )
+    Expense.objects.create(
+        user=kyiv_user, amount=5, category=category, date=date(2026, 3, 11)
+    )
+
+    # 22:30 UTC on the 10th is already the 11th in Kyiv
+    with at(2026, 3, 10, 22, 30):
+        response = api_client.get("/api/stats/")
+
+    assert response.data["spent_today"] == Decimal("5.00")
+
+
+@pytest.mark.django_db
+def test_spent_today_skips_other_currencies(api_client, budget, category):
+    Expense.objects.create(
+        user=budget,
+        amount=30,
+        category=category,
+        currency="USD",
+        date=date(2026, 3, 29),
+    )
+
+    assert stats_on_the_29th(api_client)["spent_today"] == 0
+
+
+@pytest.mark.django_db
+def test_stats_reports_the_goal_and_the_balance(api_client, budget, category):
+    Expense.objects.create(
+        user=budget, amount=30, category=category, date=date(2026, 3, 2)
+    )
+
+    data = stats_on_the_29th(api_client)
+
+    assert data["savings_goal"] == Decimal("100.00")
+    assert data["month_balance"] == Decimal("370.00")
+
+
+@pytest.mark.django_db
+def test_stats_has_no_goal_when_none_is_set(api_client, user):
+    UserProfile.objects.create(user=user)
+
+    assert stats_on_the_29th(api_client)["savings_goal"] is None

@@ -280,8 +280,14 @@ def get_monthly_stats(request):
     income_total = total_with_income.get(profile.currency, 0)
     expenses_total = totals_by_currency.get(profile.currency, 0)
     savings_goal = profile.savings_goal or 0
+    spent_today = Expense.objects.filter(
+        user=request.user, date=today, currency=profile.currency
+    ).aggregate(total=Sum("amount"))["total"] or Decimal(0)
+    # counted from the start of the day: spending today must not move the limit
+    spent_before_today = expenses_total - spent_today
     daily_limit = (
-        Decimal(income_total - savings_goal - expenses_total) / remaining_days_in_month
+        Decimal(income_total - savings_goal - spent_before_today)
+        / remaining_days_in_month
     ).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
     currency_mismatch = any(
         currency != profile.currency for currency in total_with_income.keys()
@@ -293,6 +299,10 @@ def get_monthly_stats(request):
             "total": totals_by_currency,
             "income": total_with_income,
             "daily_limit": daily_limit,
+            "spent_today": spent_today,
+            "left_today": daily_limit - spent_today,
+            "savings_goal": profile.savings_goal,
+            "month_balance": income_total - expenses_total,
             "currency": profile.currency,
             "currency_mismatch": currency_mismatch,
         }

@@ -768,8 +768,18 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "\n💸 Income:\n"
     for currency, amount in data["income"].items():
         text += f"{currency}: {amount}\n"
-    text += f"\n💰 Daily limit: {data['daily_limit']} {data['currency']}\n"
-    if Decimal(data["daily_limit"]) < 0:
+    currency = data["currency"]
+    left_today = float(data["left_today"])
+    text += f"\n💰 Daily limit: {float(data['daily_limit']):.2f} {currency}\n"
+    text += f"🧾 Spent today: {float(data['spent_today']):.2f} {currency}\n"
+    if left_today < 0:
+        text += f"⚠️ Over today's limit by {-left_today:.2f} {currency}\n"
+    else:
+        text += f"✅ Left today: {left_today:.2f} {currency}\n"
+    if data["savings_goal"] is not None:
+        text += f"\n🎯 Savings goal: {float(data['savings_goal']):.2f} {currency}\n"
+        text += f"💼 Balance this month: {float(data['month_balance']):.2f} {currency}\n"
+    if float(data["daily_limit"]) < 0:
         text += "⚠️ You are over budget this month.\n"
     if data.get("currency_mismatch"):
         text += "⚠️ Some income/expenses are in a different currency — daily limit may be inaccurate.\n"
